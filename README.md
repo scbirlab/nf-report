@@ -90,10 +90,10 @@ nextflow run scbirlab/nf-reclaim
 
 ### Pipeline versions
 
-If you want to run a particular tagged version of the pipeline, such as `v0.0.1`, you can do so using
+If you want to run a particular tagged version of the pipeline, such as `v0.0.2`, you can do so using
 
 ```bash 
-nextflow run scbirlab/nf-reclaim -r v0.0.1
+nextflow run scbirlab/nf-reclaim -r v0.0.2
 ```
 
 For help, use `nextflow run scbirlab/nf-reclaim --help`.
