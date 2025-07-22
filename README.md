@@ -1,4 +1,4 @@
-# Ortholog pipeline
+# nf-reclaim pipeline
 
 ![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/scbirlab/nf-reclaim/nf-test.yml)
 [![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A523.10.0-23aa62.svg)](https://www.nextflow.io/)
@@ -24,6 +24,19 @@ of activity of targets with known inhibitors.
 
 **scbirlab/nf-reclaim** carries out the following steps:
 
+1. Fetch all high confidence targets with inhibitors from ChEMBL
+2. Fetch all protein sequences for targets from UniProt
+3. Fetch proteomes of query organisms from UniProt
+4. BLAST target protein sequences against query organism proteomes
+5. Annotate LOEUF genomic constraint scores for human targets
+6. Output inhibitors for targets meeting identity, coverage, and LOEUF cutoffs from ChEMBL
+
+In parallel, the pipeline fetches data to assess LOEUF cutoffs for toxicity:
+
+1. Fetch all inhibitors with cell IC50 or CC50 _and_ target biochemical $K_i$ from ChEMBL
+2. Fetch all targets of these inhibitors from ChEMBL
+3. Filter down to inhibitors that have target biochemical $K_i$ from ChEMBL
+4. Output cell line IC50 paired with target biochemical $K_i$
 
 ## Requirements
 
@@ -67,11 +80,20 @@ source ~/.bash_profile
 The easiest way to get going is by specifying parameters on the command-line:
 
 ```bash
-nextflow run scbirlab/nf-reclaim --organism_id 243273
+nextflow run scbirlab/nf-reclaim \
+    --organism_id 243273  \
+    --min_identity 0.3 \
+    --min_coverage 0.5 \
+    --min_pchembl 7.0
 ```
 
 Here's what the flags mean:
 - `--organism_id`: The Taxon ID of the organism, whih you can find at NCBI or UniProt
+- `--min_identity` (optional): minimum amino acid identity for orthology
+- `--min_coverage` (optional): minimum coverage for orthology
+- `--min_pchembl` (optional): minimum reported pChEMBL (potency) for inhibitors
+
+[Other options](#command-line-usage) are available.
 
 ### Running with Singularity, Docker, or Conda
 
@@ -113,9 +135,21 @@ nextflow run scbirlab/nf-reclaim --organism_id <taxon ID>
 
 The following parameters are **required**:
 
+```bash
+--organism_id       Taxon ID for organism
+# or if using sample sheet
+--sample_sheet      CSV listing Taxon ID for multiple organisms
 ```
---organism_id             Taxon ID for organism
-```
+
+The following parameters have default options, and are **optional**.
+
+- `min_identity = 35`: minimum amino acid identity for orthology
+- `min_coverage = 0.7`: minimum sequence coverage for orthology
+- `min_loeuf = 0.515`: minimum genomic constraint for human targets
+- `min_pchembl = 6.0`: minimum inhibitor pChEMBL
+- `gnomad_version = "4.1"`: which gNOMAD version to use for LOEUF values
+- `tox_cell_lines = ["HCT116","HEK293T",...,"CHO"]`: cell lines to fetch toxicity data
+- `outputs = "outputs"`: output directory
 
 ### Sample sheet
 
