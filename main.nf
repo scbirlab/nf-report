@@ -2,7 +2,7 @@
 
 /*
 ========================================================================================
-   Gene-gene interaction predicting Nextflow Workflow
+   Pipeline to identify orthologs that have purchasable inhibitors
 ========================================================================================
    Github   : https://github.com/scbirlab/nf-reclaim
    Contact  : Eachan Johnson <eachan.johnson@crick.ac.uk>
