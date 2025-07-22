@@ -59,6 +59,7 @@ process fetch_chembl_target_sequences {
 
 process fetch_chembl_tox {
 
+
     tag "v${chembl_version}:${chembl_url}:${cell_ids.join(',')}"
 
     publishDir( 
@@ -66,6 +67,9 @@ process fetch_chembl_tox {
         mode: 'copy',
     )
     
+    errorStrategy { sleep(Math.pow(2, task.attempt) * 60000 as long); return 'retry' }
+    maxRetries 5
+
     input:
     val chembl_url
     val cell_ids
@@ -364,8 +368,9 @@ process fetch_included_chembl_taxon {
         echo "${default_kingdom}" > kingdom.txt
     fi
 
-    kingdom=\$(cat kingdom.txt)
-    url="\$root_url"'?limit=0&l1__regex=^(?!'\$kingdom'\$).*'
+    #kingdom=\$(cat kingdom.txt)
+    #url="\$root_url"'?limit=0&l1__regex=^(?!'\$kingdom'\$).*'
+    url="\$root_url"'?limit=0'
     curl -s "\$url" > init_response.json
     printf "taxon_id\\ttaxon_l1\\ttaxon_l2\\ttaxon_l3\\n" > included_taxid.tsv
 
@@ -486,7 +491,7 @@ process fetch_chembl_inhibitors {
 
 process fetch_chembl_inhibitor_activities {
 
-    tag "v${chembl_version}:${id}:${target_id}: pChembl ≥ ${min_pchembl}"
+    tag "v${chembl_version}:${id}:${target_id}: pChEMBL ≥ ${min_pchembl}"
 
     errorStrategy 'retry'
     maxRetries 2
