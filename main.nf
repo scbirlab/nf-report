@@ -80,8 +80,6 @@ include {
    fetch_chembl_inhibitors;
    fetch_chembl_targets;
    fetch_pubchem_id;
-   // fetch_included_chembl_taxon;
-   // filter_targets_by_taxon;
    fetch_target_taxonomy;
    fetch_chembl_tox;
 } from './modules/chembl.nf'
@@ -93,34 +91,24 @@ include {
    fetch_gnomad_constraints;
 } from './modules/gnomad.nf'
 include { 
-   fetch_pubchem_vendors;
-} from './modules/pubchem.nf'
-include {
-   fetch_rhea_database;
-   match_uniprot_to_reactants;
-} from './modules/rhea.nf'
-include { 
    fetch_fastas_from_organism_id;
    fetch_fastas_from_uniprot_ids;
    fetch_species_gene_names;
 } from './modules/uniprot.nf'
 include { 
-   concat_files;
    stack_tables;
    stack_tables as stack_tables2;
    stack_tables as stack_tables3;
-   merge_tables;
    filter_target_list;
    merge_tox_gnomad;
+   merge_tables;
    merge_tables as merge_tables2;
    merge_tables as merge_tables3;
    merge_tables as merge_tables4;
-   merge_tables as merge_tables5;
 } from './modules/utils.nf'
 
 workflow {
 
-   // Channel.of( params.rhea_url ).set { rhea_url }
    chembl_status(
       Channel.of( workflow.start )
    )
@@ -147,12 +135,6 @@ workflow {
 
    }
 
-   // fetch_included_chembl_taxon(
-   //    sample_rows.map { tuple( it.organism_id.toString(), it.organism_id ) }.unique(),
-   //    Channel.value( params.chembl_url ),
-   //    chembl_version,
-   //    Channel.value( params.default_kingdom )
-   // )
    fetch_target_taxonomy(
       Channel.of( params.chembl_url ),
       chembl_version,
@@ -182,10 +164,6 @@ workflow {
       
    }
 
-   // fetch_included_chembl_taxon.out
-   //    .combine( fetch_chembl_targets.out )
-   //    | filter_targets_by_taxon
-   // filter_targets_by_taxon.out
    fetch_chembl_targets.out
       .map { it[-1] }
       .splitCsv( 
@@ -193,7 +171,6 @@ workflow {
          elem: 0, //1, 
          sep: '\t',
       )
-      // .map { tuple( it[0].toString(), it[1].target_uniprot_id, it[1].target_chembl_id ) }
       .map { tuple( it.target_uniprot_id, it.target_chembl_id ) }
       .unique()
       .set { id_to_uniprot_to_chembl }
@@ -207,24 +184,10 @@ workflow {
       | fetch_fastas_from_uniprot_ids
    
    fetch_fastas_from_uniprot_ids.out
-      // .take(10)
-      // .splitFasta( record: [id: true, text: true] )
-      // .take(10)
-      // .map { tuple( it.id, it.id.split("\\|")[1], it.text ) }
-      // .collectFile { [ "${it[1]}.fasta", it[2] ] }
-      // .map { tuple( it.getSimpleName(), it ) }
-      // .combine( 
-      //    // id_to_uniprot_to_chembl.map { it[1..0] }, 
-      //    id_to_uniprot_to_chembl, //.map { it[1] }, 
-      //    // by: 0,
-      // )
-      // .map { tuple( it[-1], it[1] ) }
       .collectFile( 
          name: "canonical-targets.fasta", 
-         // sort: true, 
          storeDir: "${params.outputs}/target-sequences",
       )
-      // .map { tuple( it.getSimpleName(), it ) }
       .view()
       .set { uniprot_fastas }
 
@@ -239,13 +202,9 @@ workflow {
       | diamond_blastp
 
    merge_tables(
-      // filter_targets_by_taxon.out
-      // .map { [ it[0].toString() ] + it[1..-1] }
       diamond_blastp.out.data
-         // .map { [ it[0].toString() ] + it[1..-1] }
          .combine( 
             fetch_chembl_targets.out.map { it[-1] }, 
-            // by: 0,
          ),
       Channel.value( "inner" ),
       Channel.value( false ),
@@ -298,14 +257,6 @@ workflow {
       Channel.value( false ),
       Channel.value( false ),
    )
-   // fetch_chembl_inhibitors.out
-   //    .collectFile( 
-   //       { [ "${it[0]}-inhibitors.tsv", it[1] ] }, 
-   //       keepHeader: true, 
-   //       skip: 1, 
-   //       storeDir: "${params.outputs}/inhibitors",
-   //    )
-      // | map { tuple( it.getSimpleName().split(".inhibitors")[0], it ) }
    stack_tables.out
       .tap { inhibitor_table }
       .splitCsv( header: true, sep: '\t', elem: 1 )
@@ -333,17 +284,7 @@ workflow {
       Channel.value( false ),
 
    )
-   // inhibitors_by_target
-   //    .map { tuple( it[2], it[0] ) }
-   //    .combine( fetch_pubchem_id.out, by: 0 )
-   //    .map { tuple( it[1], it[-1] ) }
-   //    .collectFile( 
-   //       { [ "${it[0]}-pubchem.tsv", it[1] ] }, 
-   //       keepHeader: true, 
-   //       skip: 1, 
-   //       storeDir: "${params.outputs}/inhibitors",
-   //    )
-   //    .map { tuple( it.getSimpleName().split("-pubchem")[0], it ) }
+
    stack_tables2.out
       .combine( inhibitor_table, by: 0 )
       .set { inhib_to_target }
@@ -373,15 +314,6 @@ workflow {
 
    )
       | set { pubchem_ids }
-  
-      // | stack_tables
-      // .collectFile( 
-      //    { [ "${it[0]}.conserved.tsv", it[1] ] }, 
-      //    keepHeader: true, 
-      //    skip: 1, 
-      //    storeDir: "${params.outputs}/inhibitors",
-      // )
-      // .set { pubchem_ids }
 
 }
 
