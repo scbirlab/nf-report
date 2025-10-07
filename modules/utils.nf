@@ -42,7 +42,7 @@ process stack_tables {
 
 process merge_tables {
 
-    tag "${id}:${table1}:${table2}|${how} -> ${directory}/${id}.${filename}"
+    tag "${id}|${how} -> ${directory}/${id}.${filename}"
 
     errorStrategy 'retry'  // sometimes container fails to load
     maxRetries 2
@@ -51,7 +51,6 @@ process merge_tables {
         "${params.outputs}/${directory}", 
         mode: 'copy',
         saveAs: { (directory && filename) ? "${id}.${filename}" : null },
-        // enabled: { directory && filename },
     )
 
     input:
@@ -100,9 +99,6 @@ process split_csv {
     input:
     tuple val( id ), path( table )
     val chunksize
-    // val how
-    // val directory
-    // val filename
 
     output:
     tuple val( id ), path( 'chunk-*.tsv' )

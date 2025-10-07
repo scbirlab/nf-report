@@ -17,7 +17,8 @@ process chembl_status {
     script:
     """
     set +x
-    curl -s https://www.ebi.ac.uk/chembl/api/data/status.json > chembl_version.json
+    curl -s  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+        https://www.ebi.ac.uk/chembl/api/data/status.json > chembl_version.json
     chembl_version=\$(jq -r '.chembl_db_version' < chembl_version.json)
     echo \$chembl_version
 
@@ -143,7 +144,8 @@ process fetch_chembl_tox {
     while [ "\$(cat next_page.txt)" != "null" ]
     do  
         sleep \$SLEEP_TIME
-        curl -s "${chembl_url}\$(cat next_page.txt)" > response.json
+        curl -s  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "${chembl_url}\$(cat next_page.txt)" > response.json
         parse_assay < response.json >> chembl_assays.tsv
         jq -r '.page_meta.next' < response.json > next_page.txt
     done    
@@ -172,7 +174,8 @@ process fetch_chembl_tox {
         query="assay_chembl_id__in=\${ids}"
         init_url="\${root_url}?\${base_query}&\${query}&limit=0"
 
-        curl -s "\${init_url}" > response.json
+        curl -s  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "\${init_url}" > response.json
 
         parse_activity < response.json >> chembl_ic50.tsv
         jq -r '.page_meta.next' < response.json > next_page.txt
@@ -204,7 +207,8 @@ process fetch_chembl_tox {
         query="molecule_chembl_id__in=\${ids}"
         init_url="\${root_url}?\${base_query}&\${query}&limit=0"
 
-        curl -s "\${init_url}" > response.json
+        curl -s  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "\${init_url}" > response.json
 
         parse_mechansisms < response.json >> targets.tsv
         jq -r '.page_meta.next' < response.json > next_page.txt
@@ -252,7 +256,8 @@ process fetch_chembl_tox {
         while [ "\$(cat next_page.txt)" != "null" ]
         do  
             sleep \$SLEEP_TIME
-            curl -s "${chembl_url}\$(cat next_page.txt)" > response.json
+            curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+                "${chembl_url}\$(cat next_page.txt)" > response.json
             parse_inhibition < response.json >> inhibition.tsv
             jq -r '.page_meta.next' < response.json > next_page.txt
         done  
@@ -369,7 +374,8 @@ process fetch_chembl_targets {
     while [ "\$(cat next_page.txt)" != "null" ]
     do  
         sleep 0.3
-        curl -s "${chembl_url}\$(cat next_page.txt)" > response.json
+        curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "${chembl_url}\$(cat next_page.txt)" > response.json
         parse_json < response.json >> chembl_targets.tsv
         jq -r '.page_meta.next' < response.json > next_page.txt
     done    
@@ -426,7 +432,8 @@ process fetch_target_taxonomy {
     while [ "\$(cat next_page.txt)" != "null" ]
     do  
         sleep 0.3
-        curl -s "${chembl_url}\$(cat next_page.txt)" > new_response.json
+        curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "${chembl_url}\$(cat next_page.txt)" > new_response.json
         parse_json < new_response.json >> "\$OUTFILE"
         jq -r '.page_meta.next' < new_response.json > next_page.txt
     done
@@ -540,7 +547,8 @@ process fetch_chembl_inhibitors {
     while [ "\$np" != "null" ]
     do  
         sleep 0.3
-        curl -s "${chembl_url}\$np" > response.json
+        curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "${chembl_url}\$np" > response.json
         parse_json < response.json >> inhibitors.tsv
         jq -r '.page_meta.next' < response.json > next_page.txt
         np=\$(cat next_page.txt)
@@ -604,7 +612,8 @@ process fetch_chembl_inhibitor_activities {
     while [ "\$np" != "null" ]
     do  
         sleep 0.3
-        curl -s "${chembl_url}\$np" > response.json
+        curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "${chembl_url}\$np" > response.json
         parse_json < response.json >> inhibitors.tsv
         jq -r '.page_meta.next' < response.json > next_page.txt
         np=\$(cat next_page.txt)
@@ -688,7 +697,8 @@ process fetch_pubchem_id {
     while [ "\$(cat next_page.txt)" != "null" ]
     do  
         sleep 0.3
-        curl -s "${chembl_url}\$(cat next_page.txt)" > new_response.json
+        curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+            "${chembl_url}\$(cat next_page.txt)" > new_response.json
         parse_json < new_response.json >> inhibitors.tsv
         jq -r '.page_meta.next' < new_response.json > next_page.txt
     done
@@ -703,6 +713,7 @@ process fetch_pubchem_id {
     do
         curl -s --request POST \
             -H "accept: application/json" -H "Content-Type: application/json" \
+            -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
             --url https://www.ebi.ac.uk/unichem/api/v1/compounds \
             --data '{
                 "type": "inchikey",

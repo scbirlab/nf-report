@@ -70,7 +70,7 @@ process fetch_fastas_from_uniprot_ids {
    script:
    """
    set -x
-   curl -X GET --header 'Accept:text/x-fasta' \
+   curl -X GET --header 'Accept:text/x-fasta'  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
       'https://www.ebi.ac.uk/proteins/api/proteins?offset=0&size=-1&accession=${id.join(',')}' \
    > proteins.fasta
 
@@ -115,7 +115,7 @@ process fetch_species_gene_names {
       for f in ids_*
       do
          these_ids=\$(tr \$'\\n' , < "\$f")
-         curl -s -X GET --header \$header \
+         curl -s -X GET --header \$header  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
             "\${url}?\${base_query}&accession=\${these_ids}" \
          | jq -r '
             .[] | [

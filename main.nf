@@ -27,9 +27,9 @@ pipeline_title = """\
 if ( params.help ) {
    println pipeline_title + """\
          Command-line usage:
-            nextflow run scbirlab/nf-reclaim --organism_id <taxon ID>
+            nextflow run scbirlab/nf-report --organism_id <taxon ID>
          Config/sample sheet usage:
-            nextflow run scbirlab/nf-reclaim -c <config-file>
+            nextflow run scbirlab/nf-report -c <config-file>
 
          The parameters can be provided either in the `nextflow.config` file or on the `nextflow run` command.
    
