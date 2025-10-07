@@ -5,7 +5,7 @@ process stack_tables {
     publishDir( 
         "${params.outputs}/${directory}", 
         mode: 'copy',
-        saveAs: { "${id}.${filename}" },
+        saveAs: { (directory && filename) ? "${id}.${filename}" : null },
     )
 
 
@@ -19,8 +19,22 @@ process stack_tables {
 
     script:
     """
-    files=(table-???.txt)
-    head -n1 \${files[0]} | cat - <(tail -n+2 -q \${files[@]}) > stacked.tsv
+    #!/usr/bin/env python
+
+    from functools import partial
+    from glob import glob
+    import pandas as pd
+
+    (
+        pd.concat(
+            map(
+                partial(pd.read_csv, sep="\\t"),
+                glob("table-???.txt"),
+            ),
+            axis=0,
+        )
+        .to_csv("stacked.tsv", sep="\\t", index=False)
+    )
     
     """
 }
@@ -36,12 +50,12 @@ process merge_tables {
     publishDir( 
         "${params.outputs}/${directory}", 
         mode: 'copy',
-        saveAs: { "${id}.${filename}" },
-        enabled: { directory && filename },
+        saveAs: { (directory && filename) ? "${id}.${filename}" : null },
+        // enabled: { directory && filename },
     )
 
     input:
-    tuple val( id ), path( table1 ), path( table2 )
+    tuple val( id ), path( table1, stageAs: 'left.tsv' ), path( table2, stageAs: 'right.tsv' )
     val how
     val directory
     val filename
@@ -68,6 +82,43 @@ process merge_tables {
     """
 }
 
+
+process split_csv {
+
+    tag "${id}:${table}"
+
+    // errorStrategy 'retry'  // sometimes container fails to load
+    // maxRetries 2
+
+    // publishDir( 
+    //     "${params.outputs}/${directory}", 
+    //     mode: 'copy',
+    //     saveAs: { (directory && filename) ? "${id}.${filename}" : null },
+    //     // enabled: { directory && filename },
+    // )
+
+    input:
+    tuple val( id ), path( table )
+    val chunksize
+    // val how
+    // val directory
+    // val filename
+
+    output:
+    tuple val( id ), path( 'chunk-*.tsv' )
+
+    script:
+    """
+    #!/usr/bin/env python
+
+    import pandas as pd
+    for i, chunk in enumerate(pd.read_csv("${table1}", sep="\\t", chunksize=${chunksize})):
+        chunk.to_csv(f"chunk-{i}.tsv", sep="\\t", index=False)   
+
+    """
+}
+
+
 process merge_tox_gnomad {
 
     tag "${table1}:${table2}:${table3}"
@@ -88,8 +139,7 @@ process merge_tox_gnomad {
 
     script:
     """
-    python -c '
-    import pandas as pd
+    #!/usr/bin/env python
 
     (
         pd.merge(
@@ -112,9 +162,6 @@ process merge_tox_gnomad {
             index=False,
         )
     )
-    
-    
-    '
     
     """
 }
@@ -140,12 +187,12 @@ process concat_files {
 
 process filter_target_list {
 
-    tag "${id}: LOEUF < ${min_loeuf}, ID > ${min_identity}%, cov. > ${min_coverage}"
+    tag "${id}: LOEUF ≤ ${min_loeuf}, ID > ${min_identity}, cov. > ${min_coverage}"
 
     publishDir( 
         "${params.outputs}/targets", 
         mode: 'copy',
-        saveAs: { "${id}-${it}" }
+        saveAs: { "${id}.${it}" }
     )
 
     input:
@@ -159,7 +206,7 @@ process filter_target_list {
 
     script:
     """
-    python -c '
+    #!/usr/bin/env python
     import pandas as pd
 
     mammalia = "Mammalia"
@@ -169,13 +216,15 @@ process filter_target_list {
     potentially_toxic_targets = set(
         df
         .query(
-            "target_taxon_id == 9606 and (LOEUF <= ${min_loeuf} or LOEUF.isna()) "
+            "target_taxon_id == 9606 "
+            "and (LOEUF <= ${min_loeuf} or LOEUF.isna()) "
             "and target_ortholog_identity > ${min_identity} "
             "and target_ortholog_coverage > ${min_coverage}"
         )
         ["ortholog_uniprot_id"]
         .tolist()
     )
+
     (
         df
         .assign(
@@ -185,8 +234,7 @@ process filter_target_list {
             )
         )
         .query(
-            "(target_taxon_id != 9606 or LOEUF > ${min_loeuf}) "
-            "and (target_taxon_id == 9606 or target_taxon_l2 != @mammalia) "
+            "(target_taxon_id == 9606 or target_taxon_l2 != @mammalia) "
             "and target_ortholog_identity > ${min_identity} "
             "and target_ortholog_coverage > ${min_coverage} "
         )
@@ -198,8 +246,6 @@ process filter_target_list {
         .drop_duplicates()
         .to_csv("conserved_hits.tsv", sep="\\t", index=False)
     )
-    
-    '
     
     """
 }

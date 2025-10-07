@@ -490,6 +490,12 @@ process fetch_chembl_inhibitors {
 
     errorStrategy 'retry'
     maxRetries 2
+
+    publishDir( 
+        "${params.outputs}/inhibitors/by-target", 
+        mode: 'copy',
+        saveAs: { "${id}.${target_id}.${it}" },
+    )
     
     input:
     tuple val( id ), val( target_id )
@@ -498,7 +504,7 @@ process fetch_chembl_inhibitors {
     val min_pchembl
 
     output:
-    tuple val( id ), path( "*.tsv" )
+    tuple val( id ), path( "inhibitors.tsv" )
 
     script:
     """

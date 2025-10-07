@@ -25,9 +25,8 @@ fi
 nextflow run "$script_dir"/.. \
     -resume $docker_flag \
     -work-dir "$script_dir"/work \
-    --test \
     --outputs "$script_dir"/output-83332 \
-    --organism_id 83332
+    --organism_id 83332 --test
 
 # Examples with sample sheet
 cd "$script_dir"/sheet
