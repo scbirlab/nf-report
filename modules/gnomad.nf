@@ -22,16 +22,28 @@ process fetch_gnomad_constraints {
     import pandas as pd
     transcript = "protein_coding"
     (   
-        pd.read_csv("gnomad.v${version}.constraint_metrics.tsv", sep="\t")
+        pd.read_csv(
+            "gnomad.v${version}.constraint_metrics.tsv", 
+            sep="\\t",
+        )
         .query("gene.str.len() > 0")
         .query("canonical and mane_select and transcript_type == @transcript")
         .assign(taxon_id=9606)
         [["taxon_id", "gene", "lof_hc_lc.pLI", "lof.oe_ci.upper"]]
-        .rename(columns={"lof_hc_lc.pLI": "pLI", "lof.oe_ci.upper": "LOEUF"})
-        .groupby(["taxon_id", "gene"])
-        .apply(lambda x: x.nsmallest(1, "LOEUF"), include_groups=False)
-        .reset_index()
-        .to_csv("gnomad.v${version}.constraint_metrics_.tsv", sep="\t", index=False)
+        .rename(columns={
+            "taxon_id": "target_taxon_id",
+            "gene": "target_gene_symbol",
+            "lof_hc_lc.pLI": "pLI", 
+            "lof.oe_ci.upper": "LOEUF",
+        })
+        .sort_values("LOEUF")
+        .groupby(["target_taxon_id", "target_gene_symbol"])
+        .head(1)
+        .to_csv(
+            "gnomad.v${version}.constraint_metrics_.tsv", 
+            sep="\\t", 
+            index=False,
+        )
     )
     '
 

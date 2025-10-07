@@ -1,17 +1,26 @@
 process stack_tables {
 
-    tag "${id}"
+    tag "${id} -> ${directory}/${id}.${filename}"
+
+    publishDir( 
+        "${params.outputs}/${directory}", 
+        mode: 'copy',
+        saveAs: { "${id}.${filename}" },
+    )
+
 
     input:
-    tuple val( id ), path( '*.txt' )
+    tuple val( id ), path( tables, stageAs: 'table-???.txt' )
+    val directory
+    val filename
 
     output:
     tuple val( id ), path( 'stacked.tsv' )
 
     script:
     """
-    files=(*.txt)
-    head -n1 \${files[0]} | cat - <(tail -n+2 -q \${files[@]} | sort -u) > stacked.tsv
+    files=(table-???.txt)
+    head -n1 \${files[0]} | cat - <(tail -n+2 -q \${files[@]}) > stacked.tsv
     
     """
 }
@@ -19,27 +28,43 @@ process stack_tables {
 
 process merge_tables {
 
-    tag "${id}"
+    tag "${id}:${table1}:${table2}|${how} -> ${directory}/${id}.${filename}"
+
+    errorStrategy 'retry'  // sometimes container fails to load
+    maxRetries 2
+
+    publishDir( 
+        "${params.outputs}/${directory}", 
+        mode: 'copy',
+        saveAs: { "${id}.${filename}" },
+        enabled: { directory && filename },
+    )
 
     input:
     tuple val( id ), path( table1 ), path( table2 )
     val how
+    val directory
+    val filename
 
     output:
     tuple val( id ), path( 'merged.tsv' )
 
     script:
     """
-    python -c '
+    #!/usr/bin/env python
+
     import pandas as pd
-    pd.merge(
-        pd.read_csv("${table1}", sep="\\t"),
-        pd.read_csv("${table2}", sep="\\t"),
-        how="${how}",
-    ).drop_duplicates().to_csv("merged.tsv", sep="\\t", index=False)
+    (
+        pd.merge(
+            pd.read_csv("${table1}", sep="\\t"),
+            pd.read_csv("${table2}", sep="\\t"),
+            how="${how}",
+        )
+        .drop_duplicates()
+        .to_csv("merged.tsv", sep="\\t", index=False)
+    )
     
-    '
-    
+
     """
 }
 
@@ -65,14 +90,29 @@ process merge_tox_gnomad {
     """
     python -c '
     import pandas as pd
-    pd.merge(
-        pd.read_csv("${table1}", sep="\\t").query("taxon_id == 9606"),
-        pd.read_csv("${table2}", sep="\\t"),
-        how="${how}",
-    ).merge(
-        pd.read_csv("${table3}", sep="\\t"),
-        how="${how}",
-    ).drop_duplicates().to_csv("target-tox-gnomad.tsv", sep="\\t", index=False)
+
+    (
+        pd.merge(
+            (
+                pd.read_csv("${table1}", sep="\\t")
+                .query("target_taxon_id == 9606")
+            ),
+            pd.read_csv("${table2}", sep="\\t"),
+            how="${how}",
+        )
+        .drop_duplicates()
+        .merge(
+            pd.read_csv("${table3}", sep="\\t"),
+            how="${how}",
+        )
+        .drop_duplicates()
+        .to_csv(
+            "target-tox-gnomad.tsv", 
+            sep="\\t", 
+            index=False,
+        )
+    )
+    
     
     '
     
@@ -129,28 +169,32 @@ process filter_target_list {
     potentially_toxic_targets = set(
         df
         .query(
-            "taxon_id == 9606 and (LOEUF <= ${min_loeuf} or LOEUF.isna()) "
-            "and percent_identity > 30. "
-            "and coverage > ${min_coverage}"
+            "target_taxon_id == 9606 and (LOEUF <= ${min_loeuf} or LOEUF.isna()) "
+            "and target_ortholog_identity > ${min_identity} "
+            "and target_ortholog_coverage > ${min_coverage}"
         )
-        ["species_target_uniprot_id"]
+        ["ortholog_uniprot_id"]
         .tolist()
     )
     (
         df
-        .assign(potentially_toxic=lambda x: x["species_target_uniprot_id"].isin(potentially_toxic_targets))
-        .query(
-            "(taxon_id != 9606 or LOEUF > ${min_loeuf}) "
-            "and (taxon_id == 9606 or taxon_l2 != @mammalia) "
-            "and percent_identity > ${min_identity} "
-            "and coverage > ${min_coverage} "
+        .assign(
+            potentially_toxic=lambda x: (
+                x["ortholog_uniprot_id"]
+                .isin(potentially_toxic_targets)
+            )
         )
+        .query(
+            "(target_taxon_id != 9606 or LOEUF > ${min_loeuf}) "
+            "and (target_taxon_id == 9606 or target_taxon_l2 != @mammalia) "
+            "and target_ortholog_identity > ${min_identity} "
+            "and target_ortholog_coverage > ${min_coverage} "
+        )
+        .sort_values("target_ortholog_identity")
         .groupby(["target_uniprot_id", "target_name"])
-        .apply(lambda x: x.nlargest(1, "percent_identity"), include_groups=False)
-        .groupby(["species_target_uniprot_id", "taxon_id"])
-        .apply(lambda x: x.nlargest(1, "percent_identity"), include_groups=False)
-        .reset_index()
-        .drop(columns="level_2")
+        .tail(1)
+        .groupby(["ortholog_uniprot_id", "target_taxon_id"])
+        .tail(1)
         .drop_duplicates()
         .to_csv("conserved_hits.tsv", sep="\\t", index=False)
     )

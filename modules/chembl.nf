@@ -76,7 +76,8 @@ process fetch_chembl_tox {
     val chembl_version
 
     output:
-    path "chembl_tox.tsv"
+    path "chembl_tox.tsv", emit: main
+    path "*.tsv", emit: tables
 
     script:
     """
@@ -85,8 +86,15 @@ process fetch_chembl_tox {
     SLEEP_TIME=0.3
 
     parse_assay () (
-        jq -r '.assays[] | [.cell_chembl_id, .assay_cell_type, .assay_chembl_id, .assay_type] | @tsv'
+        jq -r '.assays[] 
+        | [
+            .cell_chembl_id, 
+            .assay_cell_type, 
+            .assay_chembl_id, 
+            .assay_type
+        ] | @tsv'
     )
+
     parse_activity () (
         jq -r '
             .activities[] 
@@ -102,7 +110,14 @@ process fetch_chembl_tox {
     )
 
     parse_mechansisms () (
-        jq -r '.mechanisms[] | [.molecule_chembl_id, .target_chembl_id, .mechanism_of_action, .max_phase] | @tsv' 
+        jq -r '
+            .mechanisms[] 
+            | [
+                .molecule_chembl_id, 
+                .target_chembl_id, 
+                .mechanism_of_action, 
+                .max_phase
+            ] | @tsv' 
     )
 
     get_col_number () (
@@ -115,7 +130,9 @@ process fetch_chembl_tox {
     query="assay_cell_type__in=${cell_ids.join(',')}&assay_type__in=F,T&cell_chembl_id__isnull=False"
     init_url="\${root_url}?\${query}&limit=0"
 
-    printf "cell_chembl_id\\tcell_type\\tassay_chembl_id\\tassay_type\\n" \
+    header=(cell_chembl_id cell_type assay_chembl_id assay_type)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > chembl_assays.tsv
 
     curl -s "\${init_url}" > response.json
@@ -141,7 +158,9 @@ process fetch_chembl_tox {
     root_url="${chembl_url}/chembl/api/data/activity.json"
     base_query="standard_type__in=IC50,CC50&potential_duplicate=0&standard_value__gte=0&standard_units=nM"
 
-    printf "assay_chembl_id\\tmolecule_chembl_id\\tsmiles\\tmeasurement_type\\tstandard_value\\tunits\\n" \
+    header=(assay_chembl_id molecule_chembl_id molecule_smiles assay_measurement_type assay_standard_value assay_units)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > chembl_ic50.tsv
     
     assay_id_col=\$(get_col_number assay_chembl_id < chembl_assays.tsv)
@@ -171,7 +190,9 @@ process fetch_chembl_tox {
     root_url="${chembl_url}/chembl/api/data/mechanism.json"
     base_query="direct_interaction=1&molecular_mechanism=1&action_type__in=ANTAGONIST,INHIBITOR"
 
-    printf "molecule_chembl_id\\ttarget_chembl_id\\tmechanism\\tmax_phase\\n" \
+    header=(molecule_chembl_id target_chembl_id molecule_mechanism moleculae_max_phase)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > targets.tsv
     
     mol_col=\$(get_col_number molecule_chembl_id < chembl_ic50.tsv)
@@ -208,7 +229,10 @@ process fetch_chembl_tox {
     )
     root_url="${chembl_url}/chembl/api/data/activity.json"
     base_query="target_tax_id=9606&assay_type=B&standard_type__in=Ki,IC50&pchembl_value__gte=0&potential_duplicate=0&standard_units=nM"
-    printf "molecule_chembl_id\\ttarget_chembl_id\\ttarget_measurement\\ttarget_inhibition_value\\ttarget_inhibition_units\\n" \
+
+    header=(molecule_chembl_id target_chembl_id molecule_target_measurement molecule_target_inhibition_value molecule_target_inhibition_units)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > inhibition.tsv
     
     mol_col=\$(get_col_number molecule_chembl_id < targets.tsv)
@@ -237,16 +261,23 @@ process fetch_chembl_tox {
     python -c '
     import pandas as pd
 
-    pd.merge(
-        pd.read_csv("chembl_assays.tsv", sep="\\t"),
-        pd.read_csv("chembl_ic50.tsv", sep="\\t"),
-    ).merge(
-        pd.read_csv("targets.tsv", sep="\\t")
-    ).merge(
-        pd.read_csv("inhibition.tsv", sep="\\t")
-    ).drop_duplicates().to_csv("chembl_tox.tsv", sep="\\t", index=False)
+    (
+        pd.merge(
+            pd.read_csv("chembl_assays.tsv", sep="\\t"),
+            pd.read_csv("chembl_ic50.tsv", sep="\\t"),
+        )
+        .merge(
+            pd.read_csv("targets.tsv", sep="\\t")
+        )
+        .merge(
+            pd.read_csv("inhibition.tsv", sep="\\t")
+        )
+        .drop_duplicates()
+        .to_csv("chembl_tox.tsv", sep="\\t", index=False)
+    )
     
     '
+
     """
 
 }
@@ -259,7 +290,7 @@ process fetch_chembl_targets {
     publishDir( 
         "${params.outputs}/targets", 
         mode: 'copy',
-        saveAs: { "${it}" }
+        saveAs: { "${chembl_version}.${it}" },
     )
     
     input:
@@ -267,7 +298,7 @@ process fetch_chembl_targets {
     val chembl_version
 
     output:
-    path "chembl_targets.tsv"
+    tuple val( chembl_version), path( "chembl_targets.tsv" )
 
     script:
     """
@@ -276,38 +307,58 @@ process fetch_chembl_targets {
         tr \$'\\t' '\\t' \
         | jq -r '
             .targets[] 
+            | select( .species_group_flag? | not )
             | [
                 .tax_id, 
                 .organism, 
                 (
-                    .target_components[0]
-                    .target_component_synonyms
+                    (
+                        .target_components[0]
+                        .target_component_synonyms
+                        // empty
+                    )
                     | map(select( .syn_type == "GENE_SYMBOL" ))
                     | first
                     | .component_synonym 
                     // "NA"
                 ), 
                 (
-                    .target_components[0]
-                    .target_component_synonyms
+                    (
+                        .target_components[0]
+                        .target_component_synonyms
+                        // empty
+                    )
                     | map(select( .syn_type == "EC_NUMBER" ))
                     | first
                     | .component_synonym 
                     // "NA"
                 ), 
+                (
+                    (.target_components[0].target_component_xrefs // empty) 
+                    | map(select( .xref_src_db == "GoProcess" ))  
+                    | map(.xref_id) | join(";") 
+                    // "NA"
+                ),
+                (
+                    (.target_components[0].target_component_xrefs // empty) 
+                    | map(select( .xref_src_db == "GoProcess" ))  
+                    | map(.xref_name) | join("; ") 
+                    // "NA"
+                ),
                 .target_chembl_id, 
                 .target_components[0].accession, 
-                .target_components[0].component_description
+                .pref_name
             ] 
             | @tsv
         '
     )
 
     root_url="${chembl_url}/chembl/api/data/target.json"
-    query="target_type=SINGLE%20PROTEIN&confidence_score__gte=6&pchembl_value__gte=5&potential_duplicate=0"
+    query="target_type=SINGLE%20PROTEIN"
     init_url="\${root_url}?\${query}&limit=0"
-
-    printf "taxon_id\\torganism_name\\tgene\\tec_number\\ttarget_chembl_id\\ttarget_uniprot_id\\ttarget_name\\n" \
+    header=(target_taxon_id target_organism_name target_gene_symbol target_ec_number target_go_process_id target_go_process_name target_chembl_id target_uniprot_id target_name)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > chembl_targets.tsv
 
     curl -s "\${init_url}" > response.json
@@ -325,32 +376,31 @@ process fetch_chembl_targets {
 
     head -n1 chembl_targets.tsv \
     | cat - <(tail -n+2 chembl_targets.tsv | sort -u | sort -k1 ) \
-    > chembl_targets-sorted.tsv \
-    && mv chembl_targets-sorted.tsv chembl_targets.tsv
+    > chembl_targets-sorted.tsv
+    
+    mv chembl_targets-sorted.tsv chembl_targets.tsv
 
     """
 
 }
 
 
-process fetch_included_chembl_taxon {
+process fetch_target_taxonomy {
 
-    tag "v${chembl_version}:${id}:${organism_id}"
+    tag "v${chembl_version}"
 
     publishDir( 
-        "${params.outputs}/targets", 
+        "${params.outputs}/taxonomy", 
         mode: 'copy',
-        saveAs: { "${organism_id}-${it}" }
+        saveAs: { "${chembl_version}-${it}" }
     )
     
     input:
-    tuple val( id ), val( organism_id )
     val chembl_url
     val chembl_version
-    val default_kingdom
 
     output:
-    tuple val( id ), path( "included_taxid.tsv" )
+    path "taxon.tsv"
 
     script:
     """
@@ -359,34 +409,31 @@ process fetch_included_chembl_taxon {
         jq -r '.organisms[] | [.tax_id, .l1, .l2, .l3] | @tsv'
     )
 
-    root_url="${chembl_url}/chembl/api/data/organism.json"
-    query="tax_id=${organism_id}"
-    init_url="\$root_url"?"\$query"
-    curl -s "\$init_url" | jq -r '.organisms[0].l1 // empty' > kingdom.txt
-    if [ ! -s kingdom.txt ]
-    then
-        echo "${default_kingdom}" > kingdom.txt
-    fi
+    OUTFILE=taxon.tsv
 
-    #kingdom=\$(cat kingdom.txt)
-    #url="\$root_url"'?limit=0&l1__regex=^(?!'\$kingdom'\$).*'
+    root_url="${chembl_url}/chembl/api/data/organism.json"
     url="\$root_url"'?limit=0'
     curl -s "\$url" > init_response.json
-    printf "taxon_id\\ttaxon_l1\\ttaxon_l2\\ttaxon_l3\\n" > included_taxid.tsv
 
-    parse_json < init_response.json >> included_taxid.tsv
+    header=(target_taxon_id target_taxon_l1 target_taxon_l2 target_taxon_l3)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
+    > "\$OUTFILE"
+
+    parse_json < init_response.json >> "\$OUTFILE"
     jq -r '.page_meta.next' < init_response.json > next_page.txt
 
     while [ "\$(cat next_page.txt)" != "null" ]
     do  
         sleep 0.3
         curl -s "${chembl_url}\$(cat next_page.txt)" > new_response.json
-        parse_json < new_response.json >> included_taxid.tsv
+        parse_json < new_response.json >> "\$OUTFILE"
         jq -r '.page_meta.next' < new_response.json > next_page.txt
     done
 
-    head -n1 included_taxid.tsv | cat - <(tail -n+2 included_taxid.tsv | sort -u) > included_taxid-sorted.tsv \
-    && mv included_taxid-sorted.tsv included_taxid.tsv
+    TEMP=\$(basename "\$OUTFILE" .tsv)-sorted.tsv
+    head -n1 "\$OUTFILE" | cat - <(tail -n+2 "\$OUTFILE" | sort -u) > "\$TEMP" \
+    && mv "\$TEMP" "\$OUTFILE"
 
     """
 
@@ -439,7 +486,7 @@ process filter_targets_by_taxon {
 
 process fetch_chembl_inhibitors {
 
-    tag "v${chembl_version}:${id}:${target_id}"
+    tag "v${chembl_version}:${id}:${target_id}: pChEMBL ≥ ${min_pchembl}"
 
     errorStrategy 'retry'
     maxRetries 2
@@ -448,6 +495,7 @@ process fetch_chembl_inhibitors {
     tuple val( id ), val( target_id )
     val chembl_url
     val chembl_version
+    val min_pchembl
 
     output:
     tuple val( id ), path( "*.tsv" )
@@ -456,15 +504,26 @@ process fetch_chembl_inhibitors {
     """
     set -x
     parse_json () (
-        jq -r '.activities[] | [.target_chembl_id, .target_pref_name, .target_organism, .target_tax_id, .molecule_chembl_id, .molecule_pref_name, .canonical_smiles] | @tsv' \
+        jq -r '
+            .activities[] | [
+                .target_tax_id, 
+                .target_organism, 
+                .target_chembl_id, 
+                .target_pref_name, 
+                .molecule_chembl_id, 
+                .molecule_pref_name, 
+                .canonical_smiles
+            ] | @tsv' \
         | sort -u
     )
 
     root_url="${chembl_url}/chembl/api/data/activity.json"
-    query="target_chembl_id=${target_id}&confidence_score__gte=6&pchembl_value__gte=5&potential_duplicate=0"
+    query="target_chembl_id=${target_id}&confidence_score__gte=6&pchembl_value__gte=${min_pchembl}&potential_duplicate=0"
     init_url="\$root_url"'?limit=0&'"\$query"
     
-    printf "target_chembl_id\\ttarget_name\\torganism_name\\ttaxon_id\\tmolecule_chembl_id\\tmolecule_name\\tsmiles\\n" \
+    header=(target_taxon_id target_organism_name target_chembl_id target_name molecule_chembl_id molecule_name molecule_smiles)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > inhibitors.tsv
 
     curl -s "\$init_url" > response.json
@@ -509,7 +568,15 @@ process fetch_chembl_inhibitor_activities {
     """
     set -x
     parse_json () (
-        jq -r '.activities[] | [.target_chembl_id, .target_pref_name, .target_organism, .target_tax_id, .molecule_chembl_id, .molecule_pref_name, .canonical_smiles] | @tsv' \
+        jq -r '.activities[] | [
+            .target_tax_id, 
+            .target_organism, 
+            .target_chembl_id, 
+            .target_pref_name, 
+            .molecule_chembl_id, 
+            .molecule_pref_name, 
+            .canonical_smiles
+        ] | @tsv' \
         | sort -u
     )
 
@@ -517,8 +584,10 @@ process fetch_chembl_inhibitor_activities {
     base_query='confidence_score__gte=6&potential_duplicate=0'
     query="target_chembl_id=${target_id}&pchembl_value__gte=${min_pchembl}"
     init_url="\$root_url"'?limit=0&'"\$base_query"'&'"\$query"
+
+    header=(target_taxon_id target_organism_name target_chembl_id target_name molecule_chembl_id molecule_name molecule_smiles)
     
-    printf "target_chembl_id\ttarget_name\torganism_name\ttaxon_id\tmolecule_chembl_id\tmolecule_name\tsmiles\n" \
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > inhibitors.tsv
 
     curl -s "\$init_url" > response.json
@@ -563,15 +632,47 @@ process fetch_pubchem_id {
     """
     set -x
     parse_json () (
-        jq -r '.molecules[] | [.molecule_chembl_id, .pref_name, .oral, .topical, .parenteral, .orphan, .natural_product, .chemical_probe, .black_box_warning, .max_phase, .molecule_structures.canonical_smiles, .molecule_structures.standard_inchi_key] | @tsv' \
+        jq -r '
+            .molecules[] | [
+                .molecule_chembl_id, 
+                .pref_name, 
+                .molecule_structures.canonical_smiles, 
+                .molecule_structures.standard_inchi_key,
+                .oral, 
+                .topical, 
+                .parenteral, 
+                .orphan, 
+                .natural_product, 
+                .chemical_probe, 
+                .black_box_warning, 
+                .max_phase
+            ] | @tsv' \
         | sort -u
+    )
+
+    parse_json_unichem () (
+        jq -r '
+            .compounds[0].sources 
+            | [
+                (map(select( .shortName == "chembl" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "pubchem" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "drugbank" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "zinc" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "emolecules" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "selleck" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "mcule" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "molport" )) | first | (.compoundId // "NA", .url // "NA")),
+                (map(select( .shortName == "MedChemExpress" )) | first | (.compoundId // "NA", .url // "NA"))
+            ] | @tsv'
     )
 
     root_url="${chembl_url}/chembl/api/data/molecule.json"
     query="molecule_chembl_id=${chembl_id}"
     init_url="\$root_url"'?limit=0&'"\$query"
     
-    printf "molecule_chembl_id\tmolecule_name\tis_oral\tis_topical\tis_parenteral\tis_orphan\tis_natural_product\tis_chemcial_probe\thas_black_box\tmax_phase\tsmiles\tinchikey\n" \
+    header=(molecule_chembl_id molecule_name molecule_smiles molecule_inchikey is_oral is_topical is_parenteral is_orphan is_natural_product is_chemcial_probe has_black_box max_phase)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > inhibitors.tsv
 
     curl -s "\$init_url" > init_response.json
@@ -587,7 +688,11 @@ process fetch_pubchem_id {
     done
 
     inchikey_col=\$(head -n1 inhibitors.tsv | tr \$'\\t' \$'\\n' | grep -n -Fw inchikey | cut -d: -f1)
-    printf "pubchem_id\\tpubchem_url\\tmolecule_chembl_id\\tmolecule_chembl_url\\tdrugbank_id\\tdrugbank_url\\tvendor_zinc_id\\tzinc_url\\tvendor_emolecules_id\\temolecules_url\\tvendor_selleck\\tselleck_url\\tvendor_mcule\\tmcule_url\\tvendor_molport\\tmolport_url\\tvendor_mce\\tmce_url\\n" > pubchem_ids.txt
+
+    header=(molecule_chembl_id molecule_chembl_url pubchem_id pubchem_url drugbank_id drugbank_url vendor_zinc_id zinc_url vendor_emolecules_id emolecules_url vendor_selleck selleck_url vendor_mcule mcule_url vendor_molport molport_url vendor_mce mce_url)
+    
+    printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
+    > pubchem_ids.txt
     for key in \$(tail -n+2 inhibitors.tsv | cut -f\$inchikey_col)
     do
         curl -s --request POST \
@@ -596,22 +701,9 @@ process fetch_pubchem_id {
             --data '{
                 "type": "inchikey",
                 "compound": "'"\$key"'"
-            }' > unichem-response.json
-        jq -r '
-            .compounds[0].sources 
-            | [
-                (map(select( .shortName == "pubchem" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "chembl" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "drugbank" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "zinc" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "emolecules" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "selleck" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "mcule" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "molport" )) | first | (.compoundId // "NA", .url // "NA")),
-                (map(select( .shortName == "MedChemExpress" )) | first | (.compoundId // "NA", .url // "NA"))
-            ] | @tsv
-        ' \
-        < unichem-response.json \
+            }' \
+        > unichem-response.json
+        parse_json_unichem < unichem-response.json \
         >> pubchem_ids.txt
     done
 

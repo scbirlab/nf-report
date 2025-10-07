@@ -1,9 +1,12 @@
 process fetch_fastas_from_organism_id {
 
+   errorStrategy 'retry'  // sometimes UniProt fails to respond
+   maxRetries 2
+
    tag "${id}"
 
    publishDir( 
-      "${params.outputs}/sequences", 
+      "${params.outputs}/proteome-sequences", 
       mode: 'copy',
       saveAs: { "${organism_id}.fasta.gz" }
    )
@@ -18,25 +21,28 @@ process fetch_fastas_from_organism_id {
    """
    function get_proteome_id() {
       curl -s "https://rest.uniprot.org/proteomes/search?query=(taxonomy_id:${organism_id})&format=json" \
-      | jq '.results[] | select(.proteomeType == "'"\$1"' proteome").id'
+      | jq -r '.results[] | select(.proteomeType == "'"\$1"' proteome").id'
    }
    QUERIES=("Reference and representative" "Reference" "Representative" "Other")
    PROTEOME_ID=
    for q in "\${QUERIES[@]}"
    do
       PROTEOME_ID=\$(get_proteome_id "\$q")
-      if [ ! -z \$PROTEOME_ID ]
+      if [ -n "\$PROTEOME_ID" ]
       then 
          break
       fi
    done
 
-   (wget "https://rest.uniprot.org/uniprotkb/stream?query=(proteome:\$PROTEOME_ID)&format=fasta&download=true&compressed=true" \
-      -O proteome.fasta.gz) \
-      || (
-         echo "Failed to download taxonomy ID ${organism_id} with proteome ID \$PROTEOME_ID from UniProt"
-         exit 1   
-      )
+   if [ -n "\$PROTEOME_ID" ]
+   then
+      wget "https://rest.uniprot.org/uniprotkb/stream?query=(proteome:\$PROTEOME_ID)&format=fasta&download=true&compressed=true" \
+      -O proteome.fasta.gz
+   else
+      echo "Failed to download taxonomy ID ${organism_id} with proteome ID \$PROTEOME_ID from UniProt"
+      exit 1
+   fi
+
    """
 
 }
@@ -73,16 +79,19 @@ process fetch_fasta_from_uniprot_id {
 
 process fetch_fastas_from_uniprot_ids {
 
-   tag "${uniprot_ids[0]}...${uniprot_ids[-1]}"
+   tag "${id[0]}...${id[-1]}"
+
+   errorStrategy 'retry'
+   maxRetries 2
 
    publishDir( 
       "${params.outputs}/sequences", 
       mode: 'copy',
-      saveAs: { "${uniprot_ids[0]}-${uniprot_ids[-1]}.fasta" },
+      saveAs: { "${id[0]}-${id[-1]}.fasta" },
    )
 
    input:
-   val uniprot_ids
+   val id
 
    output:
    path "proteins.fasta"
@@ -91,7 +100,7 @@ process fetch_fastas_from_uniprot_ids {
    """
    set -x
    curl -X GET --header 'Accept:text/x-fasta' \
-      'https://www.ebi.ac.uk/proteins/api/proteins?offset=0&size=-1&accession=${uniprot_ids.join(',')}' \
+      'https://www.ebi.ac.uk/proteins/api/proteins?offset=0&size=-1&accession=${id.join(',')}' \
    > proteins.fasta
 
    """
@@ -109,7 +118,7 @@ process fetch_species_gene_names {
    )
 
    input:
-   tuple val( id ), path( table )
+   tuple val( id ), path( table ), path( taxon_table )
    val column
 
    output:
@@ -121,27 +130,49 @@ process fetch_species_gene_names {
 
    col=\$(head -n1 "${table}" | tr \$'\\t' \$'\\n' | grep -nFw "${column}" | cut -d: -f1)
    tail -n+2 "${table}" | cut -f"\$col" | sort -u | split -l50 - 'ids_'
-   url='https://www.ebi.ac.uk/proteins/api/proteins'
-   base_query='offset=0&size=-1'
-   header='Accept:application/json'
 
-   printf '${column}\\tspecies_target_name\\tspecies_target_locus\\n' > targets0.tsv
-   for f in ids_*
-   do
-      these_ids=\$(tr \$'\\n' , < "\$f")
-      curl -s -X GET --header \$header \
-         "\${url}?\${base_query}&accession=\${these_ids}" \
-      | jq -r '.[] | [.accession, (.gene[0].name.value // "NA"), ((.gene[0].olnNames // [])[0].value // "NA")] | @tsv' \
-      >> targets0.tsv
-   done
+   printf '${column}\\tspecies_target_name\\tspecies_target_locus\\n' \
+   > targets0.tsv
+   
+   if ls ids_* 1> /dev/null 2>&1
+   then
+      url='https://www.ebi.ac.uk/proteins/api/proteins'
+      base_query='offset=0&size=-1'
+      header='Accept:application/json'
+
+      
+      for f in ids_*
+      do
+         these_ids=\$(tr \$'\\n' , < "\$f")
+         curl -s -X GET --header \$header \
+            "\${url}?\${base_query}&accession=\${these_ids}" \
+         | jq -r '
+            .[] | [
+               .accession, 
+               (.gene[0].name.value // "NA"), 
+               ((.gene[0].olnNames // (.gene[0].orfNames // []))[0].value // "NA")
+            ] | @tsv
+         ' \
+         >> targets0.tsv
+      done
+   else
+      echo "" > targets0.tsv
+   fi
 
    python -c '
    import pandas as pd
    
-   pd.merge(
-      pd.read_csv("${table}", sep="\\t"),
-      pd.read_csv("targets0.tsv", sep="\\t"),
-   ).drop_duplicates().to_csv("targets.tsv", sep="\\t", index=False)
+   (
+      pd.read_csv("${taxon_table}", sep="\\t")
+      .merge(
+         pd.read_csv("${table}", sep="\\t"),
+      )
+      .merge(
+         pd.read_csv("targets0.tsv", sep="\\t"),
+      )
+      .drop_duplicates()
+      .to_csv("targets.tsv", sep="\\t", index=False)
+   )
    
    '
 
