@@ -12,6 +12,7 @@ dependencies:
     - conda-forge::jq
     - conda-forge::wget
     - bioconda::diamond
+    - bioconda::taxonkit
     - pip:
         - "carabiner-tools[pd,mpl]>=0.0.4"
         - "numpy"
