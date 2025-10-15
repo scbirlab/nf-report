@@ -7,8 +7,6 @@ channels:
 dependencies:
     - python==3.12
     - pip
-    - conda-forge::ca-certificates
-    - conda-forge::curl
     - conda-forge::jq
     - conda-forge::wget
     - bioconda::diamond
