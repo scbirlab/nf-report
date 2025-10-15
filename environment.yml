@@ -13,5 +13,8 @@ dependencies:
     - conda-forge::wget
     - bioconda::diamond
     - pip:
+        - "carabiner-tools[pd,mpl]>=0.0.4"
+        - "numpy"
+        - "scikit-learn"
         - "schemist>=0.0.4.post1"
         
