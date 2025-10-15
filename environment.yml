@@ -8,7 +8,6 @@ dependencies:
     - python==3.12
     - pip
     - conda-forge::jq
-    - conda-forge::wget
     - bioconda::diamond
     - bioconda::taxonkit
     - pip:
