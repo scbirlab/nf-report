@@ -8,11 +8,11 @@ dependencies:
     - python==3.12
     - pip
     - conda-forge::jq
+    - conda-forge::duckdb-cli
     - bioconda::diamond
     - bioconda::taxonkit
     - pip:
         - "carabiner-tools[pd,mpl]>=0.0.4"
-        - "duckdb"
         - "numpy"
         - "scikit-learn"
         - "schemist>=0.0.4.post1"
