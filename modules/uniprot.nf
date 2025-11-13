@@ -1,7 +1,8 @@
 process fetch_fastas_from_organism_id {
 
-   errorStrategy 'retry'  // sometimes UniProt fails to respond
-   maxRetries 2
+   errorStrategy { task.exitStatus == 35 ? 'retry' : ( task.exitStatus == 45 ? 'ignore' : 'terminate') }  // sometimes UniProt fails to respond
+   maxRetries 1
+   stageInMode 'link'
 
    tag "${id}"
 
@@ -19,9 +20,15 @@ process fetch_fastas_from_organism_id {
 
    script:
    """
+   set -eox pipefail
+
    function get_proteome_id() {
-      curl -s "https://rest.uniprot.org/proteomes/search?query=(taxonomy_id:${organism_id})&format=json" \
-      | jq -r '.results[] | select(.proteomeType == "'"\$1"' proteome").id'
+      curl "https://rest.uniprot.org/proteomes/search?query=(taxonomy_id:${organism_id})&format=json" \
+      | jq -r '
+         .results[] 
+         | select(.proteomeType == "'"\$1"' proteome") 
+         | .id
+      ' | head -n1
    }
    QUERIES=("Reference and representative" "Reference" "Representative" "Other")
    PROTEOME_ID=
@@ -36,11 +43,11 @@ process fetch_fastas_from_organism_id {
 
    if [ -n "\$PROTEOME_ID" ]
    then
-      wget "https://rest.uniprot.org/uniprotkb/stream?query=(proteome:\$PROTEOME_ID)&format=fasta&download=true&compressed=true" \
-      -O proteome.fasta.gz
+      curl -v "https://rest.uniprot.org/uniprotkb/stream?query=(proteome:\$PROTEOME_ID)&format=fasta&download=true&compressed=true" \
+      > proteome.fasta.gz
    else
       echo "Failed to download taxonomy ID ${organism_id} with proteome ID \$PROTEOME_ID from UniProt"
-      exit 1
+      exit 45
    fi
 
    """
@@ -81,9 +88,12 @@ process fetch_fastas_from_uniprot_ids {
 process fetch_species_gene_names {
 
    tag "${id}:${column}"
+   stageInMode 'link'
+   errorStrategy { if(task.attempt > 2) { return 'retry' } else { return 'ignore' } }  // retry if network issue, ignore if input issue
+   maxRetries 2
 
    publishDir( 
-      "${params.outputs}/targets", 
+      "${params.outputs}/targets/tables", 
       mode: 'copy',
       saveAs: { "${id}.${it}" },
    )
@@ -132,6 +142,7 @@ process fetch_species_gene_names {
 
    python -c '
    import pandas as pd
+   import numpy as np
    
    (
       pd.read_csv("${taxon_table}", sep="\\t")
@@ -142,6 +153,16 @@ process fetch_species_gene_names {
          pd.read_csv("targets0.tsv", sep="\\t"),
       )
       .drop_duplicates()
+      .assign(
+         ortholog_taxon_id="${id}",
+         target_is_human=lambda x: x["target_taxon_id"] == 9606, 
+         target_is_bacteria=lambda x: x["target_taxon_l1"] == "Bacteria",
+         ortholog_target_name=lambda x: np.where(
+               x["ortholog_target_name"].isna(), 
+               x["ortholog_target_locus"], 
+               x["ortholog_target_name"],
+         ),
+      )
       .to_csv("targets.tsv", sep="\\t", index=False)
    )
    

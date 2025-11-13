@@ -55,6 +55,7 @@ log.info pipeline_title + """\
       sample sheet         : ${params.sample_sheet}
       Taxon ID             : ${params.organism_id}
       Chembl URL           : ${params.chembl_url}
+      TaxonKit DB          : ${params.taxonkit_db_url}
       gNOMAD version       : ${params.gnomad_version}
    parameters
       min. pChEMBL         : ${params.min_pchembl}
@@ -62,6 +63,7 @@ log.info pipeline_title + """\
       min. ID              : ${params.min_identity}
       min. coverage        : ${params.min_coverage}
       batch size           : ${params.batch_size}
+      fetch inhibitors?    : ${params.inhibitors}
    output                  : ${params.outputs}
       make plots?          : ${params.plots}
    """
@@ -91,6 +93,20 @@ include {
    fetch_gnomad_constraints;
 } from './modules/gnomad.nf'
 include { 
+   factorise_nmf;
+} from './modules/nmf.nf'
+include { 
+   describe;
+   find_coverage_cutoff;
+} from './modules/orthology.nf'
+include { 
+   describe_provenance;
+} from './modules/provenance.nf'
+include { 
+   fetch_taxonkit_db;
+   fetch_taxonomic_ranks;
+} from './modules/taxonkit.nf'
+include { 
    fetch_fastas_from_organism_id;
    fetch_fastas_from_uniprot_ids;
    fetch_species_gene_names;
@@ -99,7 +115,9 @@ include {
    stack_tables;
    stack_tables as stack_tables2;
    stack_tables as stack_tables3;
+   stack_tables as stack_tables4;
    filter_target_list;
+   make_rbh_matrix;
    merge_tox_gnomad;
    merge_tables;
    merge_tables as merge_tables2;
@@ -109,11 +127,23 @@ include {
 
 workflow {
 
-   chembl_status(
-      Channel.of( workflow.start )
-   )
-   chembl_status.out.version.first().set { chembl_version }
+   if ( !params.chembl_db ) {
+      chembl_status(
+         Channel.of( workflow.start )
+      )
+      chembl_status.out.version
+         .first()
+         .set { chembl_version }
+   } else {
+      Channel.value( file( params.chembl_db ).simpleName )
+         .set { chembl_version }
+   }
 
+   Channel.value( params.chembl_db ? file( params.chembl_db, checkIfExists: true ) : file( 'placeholder' ) )
+      .set { chembl_db }
+
+   Channel.value( params.chembl_url )
+      .set { chembl_url }
 
    if ( params.sample_sheet ) {
 
@@ -121,38 +151,53 @@ workflow {
          params.sample_sheet,
          checkIfExists: true, 
       )
-         .splitCsv( header: true )
-         .set { sample_rows }
+         .set { sample_sheet_ch }
+         
 
    }
 
    else {
 
-      Channel.of( [
-         organism_id: params.organism_id,
-      ] )
-      .set { sample_rows }
+      Channel.of( "organism_id", "${params.organism_id}" )
+         .collectFile( name: "sample-sheet.csv", keepHeader: true, newLine: true, storeDir: "${params.outputs}/sample-sheet")
+         .set { sample_sheet_ch }
 
    }
 
+   sample_sheet_ch
+      .splitCsv( header: true )
+      .set { sample_rows }
+
+   fetch_taxonkit_db(
+      Channel.of( params.taxonkit_db_url ),
+   )
+
+   fetch_taxonomic_ranks(
+      sample_sheet_ch.combine( fetch_taxonkit_db.out ),
+      Channel.value( "organism_id" ),
+   )
+
    fetch_target_taxonomy(
-      Channel.of( params.chembl_url ),
+      chembl_url,
       chembl_version,
+      chembl_db,
    )
    fetch_chembl_targets(
-      Channel.of( params.chembl_url ),
+      chembl_url,
       chembl_version,
+      chembl_db,
    )  
    fetch_gnomad_constraints(
       Channel.of( params.gnomad_version ),
    )
 
-   if ( !params.test ) {
+   if ( !params.test && params.fetch_tox ) {
 
       fetch_chembl_tox(
-         Channel.of( params.chembl_url ),
+         chembl_url,
          Channel.value( params.tox_cell_lines ),
          chembl_version,
+         chembl_db,
       )
 
       merge_tox_gnomad(
@@ -188,7 +233,6 @@ workflow {
          name: "canonical-targets.fasta", 
          storeDir: "${params.outputs}/target-sequences",
       )
-      .view()
       .set { uniprot_fastas }
 
    sample_rows
@@ -219,7 +263,7 @@ workflow {
    merge_tables2(
       named_orthologs,
       Channel.value( "left" ),
-      Channel.value( "targets" ),
+      Channel.value( "targets/tables" ),
       Channel.value( "target_list.tsv" ),
    )
       | set { target_lists }
@@ -228,92 +272,141 @@ workflow {
       target_lists.combine( fetch_target_taxonomy.out ),
       Channel.value( "ortholog_uniprot_id" ),
    )
-
-   filter_target_list(
-      fetch_species_gene_names.out,
-      Channel.value( params.min_loeuf ),
-      Channel.value( params.min_identity ),
-      Channel.value( params.min_coverage ),
-   )
-
-   filter_target_list.out
-      .splitCsv( header: true, sep: '\t', elem: 1 )
-      .map { tuple( it[1].target_accession.split("\\|")[1], it[0]  ) }
-      .unique()
-      .combine( id_to_uniprot_to_chembl, by: 0 )
-      .map { tuple( it[1], it[-1] ) }
-      .unique()
-      .set { chembl_targets_conserved }
-   fetch_chembl_inhibitors(
-      ( params.test ? chembl_targets_conserved.take(10) : chembl_targets_conserved ),
-      Channel.value( params.chembl_url ),
-      chembl_version,
-      Channel.value( params.min_pchembl ),
-   )
-
-   stack_tables(
-      fetch_chembl_inhibitors.out
-         .groupTuple( by: 0 ),
-      Channel.value( false ),
-      Channel.value( false ),
-   )
-   stack_tables.out
-      .tap { inhibitor_table }
-      .splitCsv( header: true, sep: '\t', elem: 1 )
-      .set { inhibitors }
-
-   ( params.test ? inhibitors.take(10) : inhibitors )
-      .map { tuple( it[0].toString(), it[1].target_chembl_id, it[1].molecule_chembl_id ) }
-      .set { inhibitors_by_target }
-
-   fetch_pubchem_id(
-      inhibitors_by_target
-         .map { it[2] }
-         .unique(),
-      Channel.value( params.chembl_url ),
-      chembl_version,
-   )
-
-   stack_tables2(
-      inhibitors_by_target
-         .map { tuple( it[2], it[0] ) }
-         .combine( fetch_pubchem_id.out, by: 0 )
-         .map { tuple( it[1], it[-1] ) }
-         .groupTuple( by: 0 ),
-      Channel.value( false ),
-      Channel.value( false ),
-
-   )
-
-   stack_tables2.out
-      .combine( inhibitor_table, by: 0 )
-      .set { inhib_to_target }
-
-   merge_tables3(
-      inhib_to_target,
-      Channel.value( "inner" ),
-      Channel.value( false ),
-      Channel.value( false ),
-   )
-   merge_tables4(
+   stack_tables4(
       fetch_species_gene_names.out
-         .combine(
-            merge_tables3.out,
-            by: 0,
-         ),
-      Channel.value( "inner" ),
-      Channel.value( "inhibitors-with-targets" ),
+         .map { tuple( "_all", it[1] ) }
+         .groupTuple( by: 0 ),
+      Channel.value( "targets" ),
       Channel.value( "tsv" ),
+   ) | (
+      make_rbh_matrix
+      & describe
    )
 
-   stack_tables3(
-      merge_tables3.out
-      .groupTuple( by: 0 ),
-      Channel.value( "inhibitors" ),
-      Channel.value( "tsv" ),
-
+   factorise_nmf(
+      make_rbh_matrix.out.matrix,
    )
-      | set { pubchem_ids }
+
+   find_coverage_cutoff(
+      stack_tables4.out
+         .combine( make_rbh_matrix.out.table, by: 0 )
+   )
+
+   describe_provenance(
+      stack_tables4.out
+         .combine( find_coverage_cutoff.out.cutoff, by: 0 )
+         .combine( fetch_taxonomic_ranks.out )
+   )
+
+   if ( params.inhibitors ) {
+
+      filter_target_list(
+         fetch_species_gene_names.out
+            .combine( find_coverage_cutoff.out.cutoff.map { v -> v[1] } ),
+         Channel.value( params.min_loeuf ),
+         Channel.value( params.min_identity ),
+      )   
+
+      filter_target_list.out
+         .splitCsv( header: true, sep: '\t', elem: 1 )
+         .map { v -> tuple( v[1].target_accession.split("\\|")[1], v[0]  ) }
+         .unique()
+         .combine( id_to_uniprot_to_chembl, by: 0 )
+         .map { v -> tuple( v[1], v[-1] ) }
+         .unique()
+         .groupTuple( by: 0, sort: true )
+         .map { 
+            tuple(
+               it[0],
+               it[1].withIndex().collect { 
+                  el, i -> Math.round(Math.floor(i / params.batch_size)) 
+               },
+               it[1],
+            ) 
+         }  //  ID, [batch_i, ...], [UniProtID, ...],
+         .transpose()  //  ID, batch_i, UniProtID
+         .groupTuple( 
+            by: [0, 1],
+            sort: true,
+         )  //  ID, batch_i, [UniProtID, ...]
+         .filter { v -> v[-1].size() > 0 }  // filter out trivial (size-0) elements
+         .map { v -> tuple( v[0], v[2] ) }
+         .set { chembl_targets_conserved }
+
+      fetch_chembl_inhibitors(
+         ( params.test ? chembl_targets_conserved.take(3) : chembl_targets_conserved ),
+         chembl_url,
+         chembl_version,
+         chembl_db,
+         Channel.value( params.min_pchembl ),
+      )
+
+      stack_tables(
+         fetch_chembl_inhibitors.out
+            .groupTuple( by: 0 ),
+         Channel.value( false ),
+         Channel.value( false ),
+      )
+      stack_tables.out
+         .tap { inhibitor_table }
+         .splitCsv( header: true, sep: '\t', elem: 1 )
+         .set { inhibitors }
+
+      ( params.test ? inhibitors.take(10) : inhibitors )
+         .map { tuple( it[0].toString(), it[1].target_chembl_id, it[1].molecule_chembl_id ) }
+         .set { inhibitors_by_target }
+
+      fetch_pubchem_id(
+         inhibitors_by_target
+            .map { it[2] }
+            .unique(),
+         chembl_url,
+         chembl_version,
+         chembl_db,
+      )
+
+      stack_tables2(
+         inhibitors_by_target
+            .map { tuple( it[2], it[0] ) }
+            .combine( fetch_pubchem_id.out, by: 0 )
+            .map { tuple( it[1], it[-1] ) }
+            .groupTuple( by: 0 ),
+         Channel.value( false ),
+         Channel.value( false ),
+      )
+
+      stack_tables2.out
+         .combine( inhibitor_table, by: 0 )
+         .set { inhib_to_target }
+
+      merge_tables3(
+         inhib_to_target,
+         Channel.value( "inner" ),
+         Channel.value( false ),
+         Channel.value( false ),
+      )
+      merge_tables4(
+         fetch_species_gene_names.out
+            .combine(
+               merge_tables3.out,
+               by: 0,
+            ),
+         Channel.value( "inner" ),
+         Channel.value( "inhibitors-with-targets" ),
+         Channel.value( "tsv" ),
+      )
+
+      stack_tables3(
+         merge_tables3.out
+         .groupTuple( by: 0 ),
+         Channel.value( "inhibitors" ),
+         Channel.value( "tsv" ),
+
+      )
+         | set { pubchem_ids }
+
+   }
+   
 
 }
 

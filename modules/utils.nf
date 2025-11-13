@@ -1,6 +1,8 @@
 process stack_tables {
 
     tag "${id} -> ${directory}/${id}.${filename}"
+    label 'big_mem'
+    stageInMode 'link'
 
     publishDir( 
         "${params.outputs}/${directory}", 
@@ -10,7 +12,7 @@ process stack_tables {
 
 
     input:
-    tuple val( id ), path( tables, stageAs: 'table-???.txt' )
+    tuple val( id ), path( tables, stageAs: 'table-?????.txt' )
     val directory
     val filename
 
@@ -23,13 +25,14 @@ process stack_tables {
 
     from functools import partial
     from glob import glob
-    import pandas as pd
+
+    import pandas as pd        
 
     (
         pd.concat(
             map(
                 partial(pd.read_csv, sep="\\t"),
-                glob("table-???.txt"),
+                glob("table-*.txt"),
             ),
             axis=0,
         )
@@ -43,6 +46,7 @@ process stack_tables {
 process merge_tables {
 
     tag "${id}|${how} -> ${directory}/${id}.${filename}"
+    stageInMode 'link'
 
     errorStrategy 'retry'  // sometimes container fails to load
     maxRetries 2
@@ -136,6 +140,7 @@ process merge_tox_gnomad {
     script:
     """
     #!/usr/bin/env python
+    import pandas as pd
 
     (
         pd.merge(
@@ -183,7 +188,7 @@ process concat_files {
 
 process filter_target_list {
 
-    tag "${id}: LOEUF ≤ ${min_loeuf}, ID > ${min_identity}, cov. > ${min_coverage}"
+    tag "${id}: LOEUF ≤ ${min_loeuf}, ID > ${min_identity}"
 
     publishDir( 
         "${params.outputs}/targets", 
@@ -192,10 +197,9 @@ process filter_target_list {
     )
 
     input:
-    tuple val( id ), path( table )
+    tuple val( id ), path( table ), path( min_coverage )
     val min_loeuf
     val min_identity
-    val min_coverage
 
     output:
     tuple val( id ), path( 'conserved_hits.tsv' )
@@ -204,6 +208,9 @@ process filter_target_list {
     """
     #!/usr/bin/env python
     import pandas as pd
+
+    with open("${min_coverage}", "r") as f:
+        COVERAGE_CUTOFF = float(f.readlines()[0])
 
     mammalia = "Mammalia"
     df = pd.read_csv("${table}", sep="\\t")
@@ -215,7 +222,7 @@ process filter_target_list {
             "target_taxon_id == 9606 "
             "and (LOEUF <= ${min_loeuf} or LOEUF.isna()) "
             "and target_ortholog_identity > ${min_identity} "
-            "and target_ortholog_coverage > ${min_coverage}"
+            "and target_ortholog_coverage > @COVERAGE_CUTOFF"
         )
         ["ortholog_uniprot_id"]
         .tolist()
@@ -227,20 +234,73 @@ process filter_target_list {
             potentially_toxic=lambda x: (
                 x["ortholog_uniprot_id"]
                 .isin(potentially_toxic_targets)
-            )
+            ),
+            ortholog_taxon_id="${id}",
         )
+        .sort_values("bit_score")
+        .groupby(["target_taxon_id", "target_uniprot_id", "ortholog_taxon_id"])
+        .tail(1)
+        .groupby(["target_taxon_id", "ortholog_taxon_id", "ortholog_uniprot_id"])
+        .tail(1)
+        .drop_duplicates()
         .query(
             "(target_taxon_id == 9606 or target_taxon_l2 != @mammalia) "
             "and target_ortholog_identity > ${min_identity} "
-            "and target_ortholog_coverage > ${min_coverage} "
+            "and target_ortholog_coverage > @COVERAGE_CUTOFF "
         )
-        .sort_values("target_ortholog_identity")
-        .groupby(["target_uniprot_id", "target_name"])
+        .to_csv("conserved_hits.tsv", sep="\\t", index=False)
+    )
+    
+    """
+}
+
+process make_rbh_matrix {
+
+    tag "${id}"
+    label 'big_mem'
+
+    publishDir( 
+        "${params.outputs}/targets", 
+        mode: 'copy',
+        saveAs: { "${id}.${it}" }
+    )
+
+    input:
+    tuple val( id ), path( table )
+
+    output:
+    tuple val( id ), path( 'rbh.tsv.gz' ), emit: table
+    tuple val( id ), path( 'rbh_m.tsv.gz' ), emit: matrix
+
+    script:
+    """
+    #!/usr/bin/env python
+    import pandas as pd
+
+    df = pd.read_csv("${table}", sep="\\t")
+    print(df.head())
+
+    rbh = (
+        df
+        .sort_values("bit_score")
+        .groupby(["target_taxon_id", "target_uniprot_id", "ortholog_taxon_id"])
         .tail(1)
-        .groupby(["ortholog_uniprot_id", "target_taxon_id"])
+        .groupby(["target_taxon_id", "ortholog_taxon_id", "ortholog_uniprot_id"])
+        .tail(1)
+    )
+    rbh.to_csv("rbh.tsv.gz", sep="\\t", index=False)
+    (
+        rbh
+        .groupby(["target_uniprot_id", "ortholog_taxon_id"])
         .tail(1)
         .drop_duplicates()
-        .to_csv("conserved_hits.tsv", sep="\\t", index=False)
+        .pivot(
+            index="target_uniprot_id",
+            columns="ortholog_taxon_id",
+            values="target_ortholog_identity",
+        )
+        .fillna(0.)
+        .to_csv("rbh_m.tsv.gz", sep="\\t", index=True)
     )
     
     """

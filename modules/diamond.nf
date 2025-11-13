@@ -1,6 +1,7 @@
 process make_diamond_db {
 
     errorStrategy 'ignore'
+    stageInMode 'link'
 
     tag "${id}"
 
