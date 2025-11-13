@@ -12,6 +12,7 @@ dependencies:
     - bioconda::taxonkit
     - pip:
         - "carabiner-tools[pd,mpl]>=0.0.4"
+        - "duckdb"
         - "numpy"
         - "scikit-learn"
         - "schemist>=0.0.4.post1"
