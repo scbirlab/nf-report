@@ -36,7 +36,55 @@ process stack_tables {
             ),
             axis=0,
         )
+        .drop_duplicates()
         .to_csv("stacked.tsv", sep="\\t", index=False)
+    )
+    
+    """
+}
+
+
+process subset_table {
+
+    tag "${id}:${column} -> ${directory}/${id}.${filename}"
+    label 'big_mem'
+    stageInMode 'link'
+
+    publishDir( 
+        "${params.outputs}/${directory}", 
+        mode: 'copy',
+        saveAs: { (directory && filename) ? "${id}.${filename}" : null },
+    )
+
+
+    input:
+    tuple val( id ), path( tables, stageAs: 'table-?????.txt' )
+    val column
+    val directory
+    val filename
+
+    output:
+    tuple val( id ), path( 'subset.tsv' )
+
+    script:
+    """
+    #!/usr/bin/env python
+
+    from functools import partial
+    from glob import glob
+
+    import pandas as pd        
+
+    (
+        pd.concat(
+            map(
+                partial(pd.read_csv, sep="\\t"),
+                glob("table-*.txt"),
+            ),
+            axis=0,
+        )
+        .query("${column} == '${id}'")
+        .to_csv("subset.tsv", sep="\\t", index=False)
     )
     
     """

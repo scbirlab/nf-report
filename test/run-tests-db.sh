@@ -35,5 +35,6 @@ nextflow run ../.. \
     -resume $docker_flag \
     -work-dir "$script_dir"/work \
     --inhibitors \
+    --fetch_tox \
     --chembl_db "$script_dir"/db/chembl_36_sqlite/chembl_36.db
 cd "$start_dir"

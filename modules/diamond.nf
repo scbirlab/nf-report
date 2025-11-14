@@ -69,7 +69,7 @@ process diamond_blastp {
         { 
             split(\$1, target_id, "|"); 
             split(\$2, ortho_id, "|");
-            \$8=(\$8/100);
+            \$6=(\$6/100);
             print target_id[2], ortho_id[2], \$0, \$5/\$3 
         }
     ' \

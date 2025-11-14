@@ -81,9 +81,10 @@ include {
    chembl_status;
    fetch_chembl_inhibitors;
    fetch_chembl_targets;
+   fetch_chembl_tox;
    fetch_pubchem_id;
    fetch_target_taxonomy;
-   fetch_chembl_tox;
+   fetch_vendors;
 } from './modules/chembl.nf'
 include { 
    make_diamond_db;
@@ -116,6 +117,7 @@ include {
    stack_tables as stack_tables2;
    stack_tables as stack_tables3;
    stack_tables as stack_tables4;
+   subset_table;
    filter_target_list;
    make_rbh_matrix;
    merge_tox_gnomad;
@@ -139,7 +141,11 @@ workflow {
          .set { chembl_version }
    }
 
-   Channel.value( params.chembl_db ? file( params.chembl_db, checkIfExists: true ) : file( 'placeholder' ) )
+   Channel.value( 
+      params.chembl_db 
+      ? file( params.chembl_db, checkIfExists: true ) 
+      : file( 'placeholder' ) 
+   )
       .set { chembl_db }
 
    Channel.value( params.chembl_url )
@@ -159,7 +165,12 @@ workflow {
    else {
 
       Channel.of( "organism_id", "${params.organism_id}" )
-         .collectFile( name: "sample-sheet.csv", keepHeader: true, newLine: true, storeDir: "${params.outputs}/sample-sheet")
+         .collectFile( 
+            name: "sample-sheet.csv", 
+            keepHeader: true, 
+            newLine: true, 
+            storeDir: "${params.outputs}/sample-sheet",
+         )
          .set { sample_sheet_ch }
 
    }
@@ -201,7 +212,8 @@ workflow {
       )
 
       merge_tox_gnomad(
-         fetch_chembl_targets.out.map { it[-1] },
+         fetch_chembl_targets.out
+            .map { v -> v[-1] },
          fetch_chembl_tox.out.main,
          fetch_gnomad_constraints.out,
          Channel.value( "inner" ),
@@ -216,7 +228,7 @@ workflow {
          elem: 0, //1, 
          sep: '\t',
       )
-      .map { tuple( it.target_uniprot_id, it.target_chembl_id ) }
+      .map { v -> tuple( v.target_uniprot_id, v.target_chembl_id ) }
       .unique()
       .set { id_to_uniprot_to_chembl }
    
@@ -236,7 +248,7 @@ workflow {
       .set { uniprot_fastas }
 
    sample_rows
-      .map { tuple( it.organism_id.toString(), it.organism_id ) }
+      .map { v -> tuple( v.organism_id.toString(), v.organism_id ) }
       .unique()
       | fetch_fastas_from_organism_id  // Organism ID, FASTAs gz
       | make_diamond_db
@@ -248,7 +260,8 @@ workflow {
    merge_tables(
       diamond_blastp.out.data
          .combine( 
-            fetch_chembl_targets.out.map { it[-1] }, 
+            fetch_chembl_targets.out
+               .map { v -> v[-1] }, 
          ),
       Channel.value( "inner" ),
       Channel.value( false ),
@@ -316,12 +329,12 @@ workflow {
          .unique()
          .groupTuple( by: 0, sort: true )
          .map { 
-            tuple(
-               it[0],
-               it[1].withIndex().collect { 
+            v -> tuple(
+               v[0],
+               v[1].withIndex().collect { 
                   el, i -> Math.round(Math.floor(i / params.batch_size)) 
                },
-               it[1],
+               v[1],
             ) 
          }  //  ID, [batch_i, ...], [UniProtID, ...],
          .transpose()  //  ID, batch_i, UniProtID
@@ -353,23 +366,35 @@ workflow {
          .set { inhibitors }
 
       ( params.test ? inhibitors.take(10) : inhibitors )
-         .map { tuple( it[0].toString(), it[1].target_chembl_id, it[1].molecule_chembl_id ) }
+         .map { v -> tuple( v[0].toString(), v[1].target_chembl_id, v[1].molecule_chembl_id ) }
          .set { inhibitors_by_target }
 
       fetch_pubchem_id(
          inhibitors_by_target
-            .map { it[2] }
-            .unique(),
+            .map { v -> v[2] }
+            .unique()
+            .toSortedList()
+            .flatten()
+            .buffer( size: params.batch_size, remainder: true ),
          chembl_url,
          chembl_version,
          chembl_db,
       )
+         | fetch_vendors
+
+      // subset_table(
+      //    fetch_vendors.out.transpose(),
+      //    Channel.value( "molecule_chembl_id" ),
+      //    Channel.value( false ),
+      //    Channel.value( false ),
+      // )
+      //    | set { purchasable_cmpds }
 
       stack_tables2(
          inhibitors_by_target
-            .map { tuple( it[2], it[0] ) }
-            .combine( fetch_pubchem_id.out, by: 0 )
-            .map { tuple( it[1], it[-1] ) }
+            .map { v -> tuple( v[2], v[0] ) }
+            .combine( fetch_vendors.out.transpose(), by: 0 )
+            .map { v -> tuple( v[1], v[-1] ) }
             .groupTuple( by: 0 ),
          Channel.value( false ),
          Channel.value( false ),

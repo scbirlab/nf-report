@@ -94,7 +94,7 @@ process factorise_nmf {
     m = pd.read_csv("${matrix}", sep="\\t", index_col=0)
 
     results, (knee_x, knee_y), factorizer, (W, H) = nmf_scan(
-        m / 100.,
+        m,
         num=100,    
     )
     m_approx = factorizer.inverse_transform(W)
@@ -131,7 +131,7 @@ process factorise_nmf {
     modelled_vs_observed = pd.DataFrame(
         {
             "modelled": m_approx.ravel(),
-            "observed": m.values.ravel() / 100.,
+            "observed": m.values.ravel(),
         },
     )
     modelled_vs_observed_sampled = modelled_vs_observed.sample(
