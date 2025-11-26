@@ -17,4 +17,5 @@ dependencies:
         - "scikit-learn"
         - "schemist>=0.0.4.post1"
         - "seaborn"
+        - "umap-learn>=0.5.7"
         
