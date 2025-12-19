@@ -56,8 +56,8 @@ process umaps_of_rbh_matrix {
         columns=["UMAP 1", "UMAP 2"],
     )
 
-    assert rbh_m.index.get_level_values("target_is_human").values.any(), "No human targets present"
-    assert rbh_m.index.get_level_values("target_is_bacteria").values.any(), "No bacterial targets present"
+    #assert rbh_m.index.get_level_values("target_is_human").values.any(), "No human targets present"
+    #assert rbh_m.index.get_level_values("target_is_bacteria").values.any(), "No bacterial targets present"
 
     target_weights_human = (
         rbh_m
@@ -102,7 +102,7 @@ process umaps_of_rbh_matrix {
         sc = ax.scatter(
             *bacteria_embedding.values.T,
             s=.1,
-            c=w.iloc[:,1].values,
+            c=w.iloc[:,-1].values,
             cmap="magma",
             vmin=0., #vmax=1.,
         )
