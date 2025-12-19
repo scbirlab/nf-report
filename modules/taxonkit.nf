@@ -59,7 +59,7 @@ process fetch_taxonomic_ranks {
     > "taxonomy.csv"
 
     tail -n+2 "${table}" \
-    | cut -f2 -d, \
+    | cut -f"\$tax_id_col" -d, \
     | sort -u -n \
     | taxonkit reformat \
         --data-dir "${taxonkit_db}" \

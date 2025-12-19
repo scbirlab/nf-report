@@ -65,14 +65,14 @@ process fetch_fastas_from_uniprot_ids {
    publishDir( 
       "${params.outputs}/sequences", 
       mode: 'copy',
-      saveAs: { "${id[0]}.${id[-1]}.fasta" },
+      saveAs: { "${id[0]}.${id[-1]}.fasta.gz" },
    )
 
    input:
    val id
 
    output:
-   path "proteins.fasta"
+   path "proteins.fasta.gz"
 
    script:
    """
@@ -80,6 +80,7 @@ process fetch_fastas_from_uniprot_ids {
    curl -X GET --header 'Accept:text/x-fasta'  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
       'https://www.ebi.ac.uk/proteins/api/proteins?offset=0&size=-1&accession=${id.join(',')}' \
    > proteins.fasta
+   gzip --best proteins.fasta
 
    """
 
@@ -103,14 +104,14 @@ process fetch_species_gene_names {
    val column
 
    output:
-   tuple val( id ), path( 'targets.tsv' )
+   tuple val( id ), path( 'targets.tsv.gz' )
 
    script:
    """
    set -x
 
-   col=\$(head -n1 "${table}" | tr \$'\\t' \$'\\n' | grep -nFw "${column}" | cut -d: -f1)
-   tail -n+2 "${table}" | cut -f"\$col" | sort -u | split -l50 - 'ids_'
+   col=\$(zcat "${table}" | head -n1  | tr \$'\\t' \$'\\n' | grep -nFw "${column}" | cut -d: -f1)
+   zcat "${table}" | tail -n+2 | cut -f"\$col" | sort -u | split -l50 - 'ids_'
 
    printf '${column}\\tortholog_target_name\\tortholog_target_locus\\n' \
    > targets0.tsv
@@ -163,7 +164,7 @@ process fetch_species_gene_names {
                x["ortholog_target_name"],
          ),
       )
-      .to_csv("targets.tsv", sep="\\t", index=False)
+      .to_csv("targets.tsv.gz", sep="\\t", index=False)
    )
    
    '

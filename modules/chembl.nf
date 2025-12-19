@@ -83,8 +83,7 @@ process fetch_chembl_tox {
     path chembl_db
 
     output:
-    path "chembl_tox.tsv", emit: main
-    path "*.tsv", emit: tables
+    path "chembl_tox.tsv.gz", emit: main
 
     script:
     if ( "${chembl_db}" == 'placeholder' ) {
@@ -285,7 +284,7 @@ process fetch_chembl_tox {
             pd.read_csv("inhibition.tsv", sep="\\t")
         )
         .drop_duplicates()
-        .to_csv("chembl_tox.tsv", sep="\\t", index=False)
+        .to_csv("chembl_tox.tsv.gz", sep="\\t", index=False)
     )
     
     '
@@ -402,6 +401,8 @@ process fetch_chembl_tox {
         ) TO 'chembl_tox.tsv' (HEADER, DELIMITER '\\t');
         EOF
 
+        gzip --best chembl_tox.tsv
+
         """
     }
 
@@ -424,7 +425,7 @@ process fetch_chembl_targets {
     path chembl_db
 
     output:
-    tuple val( chembl_version), path( "chembl_targets.tsv" )
+    tuple val( chembl_version), path( "chembl_targets.tsv.gz" )
 
     script:
     if ( "${chembl_db}" == 'placeholder' ) {
@@ -507,6 +508,7 @@ process fetch_chembl_targets {
         > chembl_targets-sorted.tsv
         
         mv chembl_targets-sorted.tsv chembl_targets.tsv
+        gzip --best chembl_targets.tsv
 
         """
     }
@@ -614,6 +616,7 @@ process fetch_chembl_targets {
           > chembl_targets-sorted.tsv
 
         mv chembl_targets-sorted.tsv chembl_targets.tsv
+        gzip --best chembl_targets.tsv
         
         """
     }
@@ -718,7 +721,7 @@ process fetch_target_taxonomy {
 
 process fetch_chembl_inhibitors {
 
-    tag "v${chembl_version}:${id}:${target_ids[0]}...${target_ids[-1]}: pChEMBL ≥ ${min_pchembl}"
+    tag "v${chembl_version}:${target_ids[0]}...${target_ids[-1]}: pChEMBL ≥ ${min_pchembl}"
     stageInMode 'link'
     // maxForks 2
     
@@ -727,20 +730,20 @@ process fetch_chembl_inhibitors {
     maxRetries 5
 
     publishDir( 
-        "${params.outputs}/inhibitors/by-target", 
+        "${params.outputs}/inhibitors/by-target",
         mode: 'copy',
-        saveAs: { "${id}.${target_ids[0]}-${target_ids[-1]}.${it}" },
+        saveAs: { "${target_ids[0]}-${target_ids[-1]}.${it}" },
     )
     
     input:
-    tuple val( id ), val( target_ids )
+    val target_ids
     val chembl_url
     val chembl_version
     path chembl_db
     val min_pchembl
 
     output:
-    tuple val( id ), path( "inhibitors.tsv" )
+    tuple val( target_ids ), path( "inhibitors.tsv.gz" )
 
     script:
     if ( "${chembl_db}" == 'placeholder' ) {
@@ -810,6 +813,7 @@ process fetch_chembl_inhibitors {
 
         head -n1 inhibitors.tsv | cat - <(tail -n+2 inhibitors.tsv | sort -u) > inhibitors-sorted.tsv \
         && mv inhibitors-sorted.tsv inhibitors.tsv
+        gzip --best inhibitors.tsv
 
         """
     }
@@ -852,6 +856,7 @@ process fetch_chembl_inhibitors {
 
         head -n1 inhibitors.tsv | cat - <(tail -n+2 inhibitors.tsv | sort -u) > inhibitors-sorted.tsv \
         && mv inhibitors-sorted.tsv inhibitors.tsv
+        gzip --best inhibitors.tsv
         
         """
 
@@ -872,7 +877,7 @@ process fetch_pubchem_id {
     path chembl_db
 
     output:
-    tuple val( chembl_id ), path( "inhibitors.tsv" )
+    tuple val( chembl_id ), path( "inhibitors.tsv.gz" )
 
     script:
     if ( "${chembl_db}" == 'placeholder' ) {
@@ -925,6 +930,7 @@ process fetch_pubchem_id {
 
         head -n1 inhibitors.tsv | cat - <(tail -n+2 inhibitors.tsv | sort -u) > inhibitors-sorted.tsv
         mv inhibitors-sorted.tsv inhibitors.tsv
+        gzip --best inhibitors.tsv
         
         """
     } 
@@ -970,6 +976,7 @@ process fetch_pubchem_id {
 
         head -n1 inhibitors.tsv | cat - <(tail -n+2 inhibitors.tsv | sort -u) > inhibitors-sorted.tsv
         mv inhibitors-sorted.tsv inhibitors.tsv
+        gzip --best inhibitors.tsv
 
         """
     }
@@ -990,18 +997,18 @@ process fetch_vendors {
     tuple val( chembl_id ), path( table )
 
     output:
-    tuple val( chembl_id ), path( "purchasable.tsv" )
+    tuple val( chembl_id ), path( "purchasable.tsv.gz" )
 
     script:
 
     """
-    set -euox pipefail
+    set -eux
 
     parse_json_unichem () (
         jq -r '
         # helper: pick first source with given shortName, or {} if none
         def pick(\$name):
-            (map(select(.shortName == \$name)) | first // {})
+            (map(select(.shortName == \$name) // {}) | first // {})
             | (.compoundId // "NA", .url // "NA");
 
         # start from sources; if no compound or no sources, use [] so map() is safe
@@ -1016,19 +1023,20 @@ process fetch_vendors {
             (\$srcs | pick("mcule")),
             (\$srcs | pick("molport")),
             (\$srcs | pick("MedChemExpress"))
-            ]
+        ]
         | @tsv
         '
     )
 
-    inchikey_col=\$(head -n1 "${table}" | tr \$'\\t' \$'\\n' | grep -n -Fw molecule_inchikey | cut -d: -f1)
+    inchikey_col=\$(zcat "${table}" | head -n1 | tr \$'\\t' \$'\\n' | grep -n -Fw molecule_inchikey | cut -d: -f1)
 
     header=(molecule_chembl_id molecule_chembl_url pubchem_id pubchem_url drugbank_id drugbank_url vendor_zinc_id zinc_url vendor_emolecules_id emolecules_url vendor_selleck selleck_url vendor_mcule mcule_url vendor_molport molport_url vendor_mce mce_url)
     
     printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > pubchem_ids.txt
-    for key in \$(tail -n+2 "${table}" | cut -f"\$inchikey_col")
+    for key in \$(zcat "${table}" | tail -n+2 | cut -f"\$inchikey_col")
     do
+        sleep 0.1
         curl -s --request POST \
             -H "accept: application/json" \
             -H "Content-Type: application/json" \
@@ -1044,9 +1052,10 @@ process fetch_vendors {
         >> pubchem_ids.txt
     done
 
-    paste "${table}" pubchem_ids.txt > inhibitors-ids.tsv
+    zcat "${table}" | paste - pubchem_ids.txt > inhibitors-ids.tsv
     head -n1 inhibitors-ids.tsv | cat - <(tail -n+2 inhibitors-ids.tsv | sort -u) > inhibitors-sorted.tsv
     mv inhibitors-sorted.tsv purchasable.tsv
+    gzip --best purchasable.tsv
     
     """
 

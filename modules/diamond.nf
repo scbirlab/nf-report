@@ -49,8 +49,8 @@ process diamond_blastp {
     tuple val( id ), path( db ), path( queries )
 
     output:
-    tuple val( id ), path( "hits.tsv" ), emit: data
-    tuple val( id ), path( "hit_count.tsv" ), emit: stats
+    tuple val( id ), path( "hits.tsv.gz" ), emit: data
+    tuple val( id ), path( "hit_count.tsv.gz" ), emit: stats
 
     script:
     """
@@ -74,15 +74,18 @@ process diamond_blastp {
         }
     ' \
     > hits.tsv
+    gzip --best hits.tsv
 
     # rough histogram
-    awk -F'\\t' -v OFS='\\t' '
+    zcat hits.tsv.gz \
+    | awk -F'\\t' -v OFS='\\t' '
         BEGIN { print "ortholog_uniprot_id", "ortholog_count" }
         (NR == 1) { for ( i=0; i<=NF; i++ ) a[\$i]=i }
         (NR > 1) { c[\$a["ortholog_uniprot_id"]]++ }
         END { for ( p in c ) print p, c[p] }
-    ' hits.tsv \
+    ' \
     > hit_count.tsv
+    gzip --best hit_count.tsv
 
     """
 

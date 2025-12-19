@@ -104,9 +104,15 @@ include {
    describe_provenance;
 } from './modules/provenance.nf'
 include { 
+   silhouette;
+} from './modules/silhouette.nf'
+include { 
    fetch_taxonkit_db;
    fetch_taxonomic_ranks;
 } from './modules/taxonkit.nf'
+include { 
+   umaps_of_rbh_matrix;
+} from './modules/umap.nf'
 include { 
    fetch_fastas_from_organism_id;
    fetch_fastas_from_uniprot_ids;
@@ -126,6 +132,8 @@ include {
    merge_tables as merge_tables3;
    merge_tables as merge_tables4;
 } from './modules/utils.nf'
+
+
 
 workflow {
 
@@ -237,7 +245,7 @@ workflow {
       .unique()
       .toSortedList()
       .flatten()
-      .buffer( size: params.batch_size, remainder: true )
+      .buffer( size: Math.min( params.batch_size, 100 ), remainder: true )
       | fetch_fastas_from_uniprot_ids
    
    fetch_fastas_from_uniprot_ids.out
@@ -291,11 +299,20 @@ workflow {
          .groupTuple( by: 0 ),
       Channel.value( "targets" ),
       Channel.value( "tsv" ),
-   ) | (
-      make_rbh_matrix
-      & describe
-   )
+   ) | describe
 
+   make_rbh_matrix(
+      stack_tables4.out
+         .combine( fetch_taxonomic_ranks.out ),
+   )
+   make_rbh_matrix.out.matrix
+      .combine(make_rbh_matrix.out.row_data, by: 0)
+      .combine(make_rbh_matrix.out.col_data, by: 0)
+      .tap { rbh_matrix }
+      | (
+         umaps_of_rbh_matrix 
+         & silhouette
+      )
    factorise_nmf(
       make_rbh_matrix.out.matrix,
    )
@@ -322,32 +339,44 @@ workflow {
 
       filter_target_list.out
          .splitCsv( header: true, sep: '\t', elem: 1 )
-         .map { v -> tuple( v[1].target_accession.split("\\|")[1], v[0]  ) }
+         .map { v -> tuple( v[1].target_accession.split("\\|")[1], v[0] ) }  // uniprot_id, ID
          .unique()
-         .combine( id_to_uniprot_to_chembl, by: 0 )
-         .map { v -> tuple( v[1], v[-1] ) }
+         .combine( id_to_uniprot_to_chembl, by: 0 )  // uniprot_id, ID, chembl_id
+         .map { v -> tuple( v[1], v[-1] ) }  // ID, chembl_id
          .unique()
-         .groupTuple( by: 0, sort: true )
-         .map { 
-            v -> tuple(
-               v[0],
-               v[1].withIndex().collect { 
-                  el, i -> Math.round(Math.floor(i / params.batch_size)) 
-               },
-               v[1],
-            ) 
-         }  //  ID, [batch_i, ...], [UniProtID, ...],
-         .transpose()  //  ID, batch_i, UniProtID
-         .groupTuple( 
-            by: [0, 1],
-            sort: true,
-         )  //  ID, batch_i, [UniProtID, ...]
-         .filter { v -> v[-1].size() > 0 }  // filter out trivial (size-0) elements
-         .map { v -> tuple( v[0], v[2] ) }
+         .tap { org_id_to_target_chembl }
+         .map { v -> v[-1] }
+         .unique()
          .set { chembl_targets_conserved }
+         // .groupTuple( by: 0, sort: true )
+         // .map { 
+         //    v -> tuple(
+         //       v[0],
+         //       v[1].withIndex().collect { 
+         //          el, i -> Math.round(Math.floor(i / params.batch_size)) 
+         //       },
+         //       v[1],
+         //    ) 
+         // }  //  ID, [batch_i, ...], [chembl_id, ...],
+         // .transpose()  //  ID, batch_i, chembl_id
+         // .groupTuple( 
+         //    by: [0, 1],
+         //    sort: true,
+         // )  //  ID, batch_i, [chembl_id, ...]
+         // .filter { v -> v[-1].size() > 0 }  // filter out trivial (size-0) elements
+         // .unique()
+         // .map { v -> tuple( v[0], v[2] ) }
+         
+         // .map { v -> v[2] }
+         // .transpose()
+         // .unique()
 
       fetch_chembl_inhibitors(
-         ( params.test ? chembl_targets_conserved.take(3) : chembl_targets_conserved ),
+         ( params.test ? chembl_targets_conserved.take(3) : chembl_targets_conserved )
+            .buffer( 
+               size: params.batch_size, 
+               remainder: true,
+         ),
          chembl_url,
          chembl_version,
          chembl_db,
@@ -356,26 +385,36 @@ workflow {
 
       stack_tables(
          fetch_chembl_inhibitors.out
+            .map { v -> tuple( "all", v[-1] ) }
             .groupTuple( by: 0 ),
          Channel.value( false ),
          Channel.value( false ),
       )
       stack_tables.out
+         .map { v -> v[-1] }
          .tap { inhibitor_table }
-         .splitCsv( header: true, sep: '\t', elem: 1 )
+         .splitCsv( 
+            header: true, 
+            sep: '\t', 
+            elem: 1, 
+            by: 1, //Math.min( params.batch_size, ( params.test ? 10 : 1000 ) ),
+         )
          .set { inhibitors }
 
-      ( params.test ? inhibitors.take(10) : inhibitors )
-         .map { v -> tuple( v[0].toString(), v[1].target_chembl_id, v[1].molecule_chembl_id ) }
+      ( params.test ? inhibitors.take(1) : inhibitors )
+         .map { v -> tuple( v.target_chembl_id, v.molecule_chembl_id ) }
+         // .view()
          .set { inhibitors_by_target }
 
       fetch_pubchem_id(
          inhibitors_by_target
-            .map { v -> v[2] }
-            .unique()
-            .toSortedList()
-            .flatten()
-            .buffer( size: params.batch_size, remainder: true ),
+            .map { v -> v[-1] }
+            .buffer( size: Math.min( params.batch_size, ( params.test ? 10 : 1000 ) ), remainder: true ),
+            // .transpose()
+            // .unique()
+            // .toSortedList()
+            // .flatten()
+            // .buffer( size: Math.min( params.batch_size, 100 ), remainder: true ),
          chembl_url,
          chembl_version,
          chembl_db,
@@ -392,16 +431,22 @@ workflow {
 
       stack_tables2(
          inhibitors_by_target
-            .map { v -> tuple( v[2], v[0] ) }
-            .combine( fetch_vendors.out.transpose(), by: 0 )
-            .map { v -> tuple( v[1], v[-1] ) }
+            .map { v -> tuple( v[1], v[0] ) }  // mol chembl id, target chembl id
+            .combine( fetch_vendors.out.transpose(), by: 0 )  // mol chembl id, target chembl id, vendor table
+            .map { v -> tuple( v[1], v[-1] ) } // target chembl id, vendor table
+            .combine( 
+               org_id_to_target_chembl
+                  .map { v -> tuple( v[1], v[0] ) },
+               by: 0,
+            )  // target chembl id, vendor table, org id
+            .map { v -> tuple( v[-1], v[1] ) }  // org id, vendor table
             .groupTuple( by: 0 ),
          Channel.value( false ),
          Channel.value( false ),
       )
 
-      stack_tables2.out
-         .combine( inhibitor_table, by: 0 )
+      stack_tables2.out.view()
+         .combine( inhibitor_table )
          .set { inhib_to_target }
 
       merge_tables3(

@@ -14,7 +14,7 @@ process factorise_nmf {
     tuple val( id ), path( matrix )
 
     output:
-    tuple val( id ), path( '*.tsv' ), emit: factors
+    tuple val( id ), path( '*.tsv.gz' ), emit: factors
     tuple val( id ), path( 'plots/*.{csv,png}' ), emit: plots
 
     script:
@@ -104,13 +104,13 @@ process factorise_nmf {
         index=pd.Index(list(range(H.shape[0])), name="nmf_factors"),
         columns=pd.Index(m.columns.values, name="ortholog_taxon_id"),
     )
-    H.to_csv(f"{H.columns.names[0]}.tsv", sep="\\t")
+    H.to_csv(f"{H.columns.names[0]}.tsv.gz", sep="\\t")
     W = pd.DataFrame(
         W, 
         index=pd.Index(m.index.values, name="target_uniprot_id"),
         columns=pd.Index(list(range(W.shape[1])), name="nmf_factors"),
     )
-    W.to_csv(f"{W.index.names[0]}.tsv", sep="\\t")
+    W.to_csv(f"{W.index.names[0]}.tsv.gz", sep="\\t")
 
     fig, axes = grid()
     axes.plot(
