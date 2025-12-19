@@ -27,6 +27,11 @@ process umaps_of_rbh_matrix {
     import numpy as np
     from umap import UMAP
 
+    os.makedirs("mpl", exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = "mpl"
+    os.makedirs("numba", exist_ok=True)
+    os.environ["NUMBA_CACHE_DIR"] = "numba"
+
     figsave = figsaver(format="pdf", output_dir=".")
 
     rbh_m = pd.read_csv("${matrix}", sep="\\t", index_col=0)
