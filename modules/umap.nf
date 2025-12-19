@@ -34,7 +34,6 @@ process umaps_of_rbh_matrix {
     import numpy as np
     from umap import UMAP
 
-
     figsave = figsaver(format="pdf", output_dir=".")
 
     rbh_m = pd.read_csv("${matrix}", sep="\\t", index_col=0)
@@ -57,8 +56,8 @@ process umaps_of_rbh_matrix {
         columns=["UMAP 1", "UMAP 2"],
     )
 
-    assert rbh_m["target_is_human"].any(), "No human targets present"
-    assert rbh_m["target_is_bacteria"].any(), "No bacterial targets present"
+    assert rbh_m.index.get_level_values("target_is_human").values.any(), "No human targets present"
+    assert rbh_m.index.get_level_values("target_is_bacteria").values.any(), "No bacterial targets present"
 
     target_weights_human = (
         rbh_m
