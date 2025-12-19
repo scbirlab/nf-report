@@ -22,7 +22,7 @@ process umaps_of_rbh_matrix {
     """
     #!/usr/bin/env python
     import os 
-    
+
     os.makedirs("mpl", exist_ok=True)
     os.environ["MPLCONFIGDIR"] = "mpl"
     os.makedirs("numba", exist_ok=True)
@@ -57,21 +57,20 @@ process umaps_of_rbh_matrix {
         columns=["UMAP 1", "UMAP 2"],
     )
 
+    assert rbh_m["target_is_human"].any(), "No human targets present"
+    assert rbh_m["target_is_bacteria"].any(), "No bacterial targets present"
+
     target_weights_human = (
         rbh_m
         .groupby("target_is_human")
-        .apply(
-            lambda x: x.mean(axis=0),
-        )
+        .mean()
         .T
     )
 
     target_weights_bacteria = (
         rbh_m
         .groupby("target_is_bacteria")
-        .apply(
-            lambda x: x.mean(axis=0),
-        )
+        .mean()
         .T
     )
 
@@ -104,7 +103,7 @@ process umaps_of_rbh_matrix {
         sc = ax.scatter(
             *bacteria_embedding.values.T,
             s=.1,
-            c=target_weights_human.iloc[:,1].values,
+            c=w.iloc[:,1].values,
             cmap="magma",
             vmin=0., #vmax=1.,
         )
