@@ -21,16 +21,19 @@ process umaps_of_rbh_matrix {
     script:
     """
     #!/usr/bin/env python
+    import os 
+    
+    os.makedirs("mpl", exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = "mpl"
+    os.makedirs("numba", exist_ok=True)
+    os.environ["NUMBA_CACHE_DIR"] = "numba"
+
     from carabiner import print_err
     from carabiner.mpl import add_legend, grid, figsaver
     import pandas as pd
     import numpy as np
     from umap import UMAP
 
-    os.makedirs("mpl", exist_ok=True)
-    os.environ["MPLCONFIGDIR"] = "mpl"
-    os.makedirs("numba", exist_ok=True)
-    os.environ["NUMBA_CACHE_DIR"] = "numba"
 
     figsave = figsaver(format="pdf", output_dir=".")
 
