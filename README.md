@@ -1,4 +1,4 @@
-# nf-reclaim pipeline
+# nf-report pipeline
 
 ![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/scbirlab/nf-reclaim/nf-test.yml)
 [![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A523.10.0-23aa62.svg)](https://www.nextflow.io/)
@@ -6,8 +6,7 @@
 [![run with docker](https://img.shields.io/badge/run%20with-docker-0db7ed?labelColor=000000&logo=docker)](https://www.docker.com/)
 [![run with singularity](https://img.shields.io/badge/run%20with-singularity-1d355c.svg?labelColor=000000)](https://sylabs.io/docs/)
 
-**scbirlab/nf-reclaim** is a Nextflow pipeline to identify bacterial orthologs and putative spectrum 
-of activity of targets with known inhibitors.
+**scbirlab/nf-report** is a Nextflow pipeline for compound Repurposing by Ortholgy (RepOrt).
 
 **Table of contents**
 
@@ -22,7 +21,7 @@ of activity of targets with known inhibitors.
 
 ## Processing steps
 
-**scbirlab/nf-reclaim** carries out the following steps:
+**scbirlab/nf-report** carries out the following steps:
 
 1. Fetch all high confidence targets with inhibitors from ChEMBL
 2. Fetch all protein sequences for targets from UniProt
@@ -80,7 +79,7 @@ source ~/.bash_profile
 The easiest way to get going is by specifying parameters on the command-line:
 
 ```bash
-nextflow run scbirlab/nf-reclaim \
+nextflow run scbirlab/nf-report \
     --organism_id 243273  \
     --min_identity 0.3 \
     --min_coverage 0.5 \

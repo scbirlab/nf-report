@@ -4,6 +4,7 @@
 /.docker/
 /outputs/
 work/
+/test/db/
 /test/*-test/
 /test/*/outputs
 /test/*/work

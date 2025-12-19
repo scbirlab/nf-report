@@ -22,16 +22,19 @@ else
 fi
 
 # Examples without sample sheet
-nextflow run "$script_dir"/.. \
-    -resume $docker_flag \
-    -work-dir "$script_dir"/work \
-    --outputs "$script_dir"/output-83332 \
-    --organism_id 83332 --test
+# nextflow run "$script_dir"/.. \
+#     -resume $docker_flag \
+#     -work-dir "$script_dir"/work \
+#     --outputs "$script_dir"/output-83332 \
+#     --chembl_db "$script_dir"/db/chembl_36_sqlite/chembl_36.db \
+#     --organism_id 83332 #--test
 
 # Examples with sample sheet
 cd "$script_dir"/sheet
 nextflow run ../.. \
     -resume $docker_flag \
     -work-dir "$script_dir"/work \
-    --test
+    --inhibitors \
+    --fetch_tox \
+    --chembl_db "$script_dir"/db/chembl_36_sqlite/chembl_36.db
 cd "$start_dir"
