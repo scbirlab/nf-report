@@ -839,6 +839,7 @@ process fetch_chembl_inhibitors {
                 t.chembl_id         AS target_chembl_id,
                 t.pref_name         AS target_name,
                 md.chembl_id        AS molecule_chembl_id,
+                act.pchembl_value   AS molecule_target_pchembl,
                 md.pref_name        AS molecule_name,
                 cs.canonical_smiles AS molecule_smiles
             FROM activities            AS act
@@ -1008,12 +1009,13 @@ process fetch_vendors {
         jq -r '
         # helper: pick first source with given shortName, or {} if none
         def pick(\$name):
-            (map(select(.shortName == \$name) // {}) | first // {})
+            ((map(select(.shortName == \$name)) | first) // {})
             | (.compoundId // "NA", .url // "NA");
 
         # start from sources; if no compound or no sources, use [] so map() is safe
         (.compounds[0].sources? // []) as \$srcs
         | [
+            (.compounds[0].standardInchiKey // "NA"),
             (\$srcs | pick("chembl")),
             (\$srcs | pick("pubchem")),
             (\$srcs | pick("drugbank")),
@@ -1028,9 +1030,9 @@ process fetch_vendors {
         '
     )
 
-    inchikey_col=\$(zcat "${table}" | head -n1 | tr \$'\\t' \$'\\n' | grep -n -Fw molecule_inchikey | cut -d: -f1)
+    inchikey_col=\$(zcat "${table}" | head -n1 | tr \$'\\t' \$'\\n' | grep -n -Fw "molecule_inchikey" | cut -d: -f1)
 
-    header=(molecule_chembl_id molecule_chembl_url pubchem_id pubchem_url drugbank_id drugbank_url vendor_zinc_id zinc_url vendor_emolecules_id emolecules_url vendor_selleck selleck_url vendor_mcule mcule_url vendor_molport molport_url vendor_mce mce_url)
+    header=(molecule_inchikey molecule_chembl_id_2 chembl_url pubchem_id pubchem_url drugbank_id drugbank_url vendor_zinc_id zinc_url vendor_emolecules_id emolecules_url vendor_selleck selleck_url vendor_mcule mcule_url vendor_molport molport_url vendor_mce mce_url)
     
     printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
     > pubchem_ids.txt
@@ -1052,9 +1054,27 @@ process fetch_vendors {
         >> pubchem_ids.txt
     done
 
-    zcat "${table}" | paste - pubchem_ids.txt > inhibitors-ids.tsv
-    head -n1 inhibitors-ids.tsv | cat - <(tail -n+2 inhibitors-ids.tsv | sort -u) > inhibitors-sorted.tsv
-    mv inhibitors-sorted.tsv purchasable.tsv
+    python -c '
+    import pandas as pd
+    NA = "NA"
+    (
+        pd.read_csv("'"${table}"'", sep="\\t")
+        .merge(
+            pd.read_csv(
+                "pubchem_ids.txt", 
+                sep="\\t",
+            )
+            .query("not molecule_inchikey.isna() and molecule_inchikey != @NA"),
+            how="left",
+        )
+        .to_csv(
+            "purchasable.tsv", 
+            sep="\\t", 
+            index=False,
+        )
+    )
+    '
+
     gzip --best purchasable.tsv
     
     """

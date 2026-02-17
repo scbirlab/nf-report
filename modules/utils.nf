@@ -272,7 +272,7 @@ process filter_target_list {
             "and target_ortholog_coverage > @COVERAGE_CUTOFF"
         )
         ["ortholog_uniprot_id"]
-        .tolist()
+        .unique()
     )
 
     (
