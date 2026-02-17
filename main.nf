@@ -401,7 +401,7 @@ workflow {
          )
          .set { inhibitors }
 
-      ( params.test ? inhibitors.take(1) : inhibitors )
+      ( params.test ? inhibitors.take(3) : inhibitors )
          .map { v -> tuple( v.target_chembl_id, v.molecule_chembl_id ) }
          // .view()
          .set { inhibitors_by_target }
@@ -409,7 +409,10 @@ workflow {
       fetch_pubchem_id(
          inhibitors_by_target
             .map { v -> v[-1] }
-            .buffer( size: Math.min( params.batch_size, ( params.test ? 10 : 1000 ) ), remainder: true ),
+            .buffer( 
+               size: Math.min( params.batch_size, ( params.test ? 10 : 1000 ) ), 
+               remainder: true,
+            ),
             // .transpose()
             // .unique()
             // .toSortedList()
@@ -429,23 +432,38 @@ workflow {
       // )
       //    | set { purchasable_cmpds }
 
+      // stack_tables2(
+      //    inhibitors_by_target
+      //       .map { v -> tuple( v[1], v[0] ) }  // mol chembl id, target chembl id
+      //       .combine( fetch_vendors.out.transpose(), by: 0 )  // mol chembl id, target chembl id, vendor table
+      //       .map { v -> tuple( v[1], v[-1] ) } // target chembl id, vendor table
+      //       .unique()
+      //       .combine(
+      //          org_id_to_target_chembl
+      //             .map { v -> tuple( v[1], v[0] ) },
+      //          by: 0,
+      //       )  // target chembl id, vendor table, org id
+      //       .map { v -> tuple( v[-1], v[1] ) }  // org id, vendor table
+      //       .unique()
+      //       .groupTuple( by: 0, sort: true ),
+      //    Channel.value( false ),
+      //    Channel.value( false ),
+      // )
+
       stack_tables2(
-         inhibitors_by_target
-            .map { v -> tuple( v[1], v[0] ) }  // mol chembl id, target chembl id
-            .combine( fetch_vendors.out.transpose(), by: 0 )  // mol chembl id, target chembl id, vendor table
-            .map { v -> tuple( v[1], v[-1] ) } // target chembl id, vendor table
-            .combine( 
-               org_id_to_target_chembl
-                  .map { v -> tuple( v[1], v[0] ) },
-               by: 0,
-            )  // target chembl id, vendor table, org id
-            .map { v -> tuple( v[-1], v[1] ) }  // org id, vendor table
-            .groupTuple( by: 0 ),
+         fetch_vendors.out
+            .map { v -> tuple( "all", v[1] ) }
+            .unique()
+            .groupTuple( by: 0 ) , // mol chembl id, target chembl id
          Channel.value( false ),
          Channel.value( false ),
       )
 
-      stack_tables2.out.view()
+      // filter_target_list.out
+      //    .combine( stack_tables2.out.map { v -> v[-1] } )
+      //    .set { inhib_to_target }
+
+      stack_tables2.out
          .combine( inhibitor_table )
          .set { inhib_to_target }
 
@@ -468,10 +486,9 @@ workflow {
 
       stack_tables3(
          merge_tables3.out
-         .groupTuple( by: 0 ),
+            .groupTuple( by: 0 ),
          Channel.value( "inhibitors" ),
          Channel.value( "tsv" ),
-
       )
          | set { pubchem_ids }
 
