@@ -79,6 +79,7 @@ log.info pipeline_title + """\
 // load modules
 include { 
    chembl_status;
+   fetch_chembl_compound_mechanisms;
    fetch_chembl_inhibitors;
    fetch_chembl_targets;
    fetch_chembl_tox;
@@ -123,6 +124,7 @@ include {
    stack_tables as stack_tables2;
    stack_tables as stack_tables3;
    stack_tables as stack_tables4;
+   stack_tables as stack_tables6;
    subset_table;
    filter_target_list;
    make_rbh_matrix;
@@ -371,16 +373,34 @@ workflow {
          // .transpose()
          // .unique()
 
+      ( params.test ? chembl_targets_conserved.take(3) : chembl_targets_conserved )
+         .buffer( 
+            size: params.batch_size, 
+            remainder: true,
+         )
+         .set { query_targets }
+
       fetch_chembl_inhibitors(
-         ( params.test ? chembl_targets_conserved.take(3) : chembl_targets_conserved )
-            .buffer( 
-               size: params.batch_size, 
-               remainder: true,
-         ),
+         query_targets,
          chembl_url,
          chembl_version,
          chembl_db,
          Channel.value( params.min_pchembl ),
+      )
+
+      fetch_chembl_compound_mechanisms(
+         query_targets,
+         chembl_url,
+         chembl_version,
+         chembl_db,
+      )
+
+      stack_tables6(
+         fetch_chembl_compound_mechanisms.out
+            .map { v -> tuple( "all", v[-1] ) }
+            .groupTuple( by: 0 ),
+         Channel.value( "mechanism" ),
+         Channel.value( "tsv" ),
       )
 
       stack_tables(
