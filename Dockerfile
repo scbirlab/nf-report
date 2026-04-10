@@ -14,13 +14,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     curl \
-    wget \
+    fonts-urw-base35 \
+    fontconfig \
     gcc \
     g++ \
     perl liburi-perl \
+    wget \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 USER 1000
+RUN fc-cache -fv
 
 COPY environment.yml /tmp/environment.yml
 RUN micromamba create -n env -f /tmp/environment.yml && \
