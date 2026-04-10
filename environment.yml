@@ -12,7 +12,7 @@ dependencies:
     - bioconda::diamond
     - bioconda::taxonkit
     - pip:
-        - "carabiner-tools[pd,mpl]>=0.0.5"
+        - "carabiner-tools[pd,mpl]>=0.0.5.post3"
         - "numpy"
         - "scikit-learn"
         - "schemist>=0.0.6"
