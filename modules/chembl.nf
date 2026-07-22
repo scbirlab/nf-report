@@ -425,7 +425,7 @@ process fetch_chembl_targets {
     path chembl_db
 
     output:
-    tuple val( chembl_version), path( "chembl_targets.tsv.gz" )
+    tuple val( chembl_version ), path( "chembl_targets.tsv.gz" )
 
     script:
     if ( "${chembl_db}" == 'placeholder' ) {
@@ -434,11 +434,11 @@ process fetch_chembl_targets {
         parse_json () (
             tr \$'\\t' '\\t' \
             | jq -r '
-                .targets[] 
-                | select( .species_group_flag? | not )
+                .targets[]
                 | [
                     .tax_id, 
-                    .organism, 
+                    .organism,
+                    .species_group_flag,
                     (
                         (
                             .target_components[0]
@@ -482,9 +482,9 @@ process fetch_chembl_targets {
         )
 
         root_url="${chembl_url}/chembl/api/data/target.json"
-        query="target_type=SINGLE%20PROTEIN"
+        query="" #"target_type=SINGLE%20PROTEIN"
         init_url="\${root_url}?\${query}&limit=0"
-        header=(target_taxon_id target_organism_name target_gene_symbol target_ec_number target_go_process_id target_go_process_name target_chembl_id target_uniprot_id target_name)
+        header=(target_taxon_id target_organism_name target_is_species_group target_gene_symbol target_ec_number target_go_process_id target_go_process_name target_chembl_id target_uniprot_id target_name)
         
         printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
         > chembl_targets.tsv
@@ -543,74 +543,89 @@ process fetch_chembl_targets {
          */
 
         COPY (
-          SELECT
-            td.tax_id      AS target_taxon_id,
-            td.organism    AS target_organism_name,
+        WITH base_targets AS (
+            SELECT
+            td.tid,
+            td.tax_id             AS target_taxon_id,
+            td.organism           AS target_organism_name,
+            td.species_group_flag AS target_is_species_group,
+            td.chembl_id          AS target_chembl_id,
+            td.pref_name          AS target_name,
+            td.target_type
+            FROM target_dictionary AS td
+            JOIN target_type       AS tt ON td.target_type = tt.target_type
+            WHERE tt.parent_type = 'PROTEIN'
+        ),
 
-            -- first / representative gene symbol synonym
+        -- Resolve complex/family → SINGLE PROTEIN children
+        resolved AS (
+            SELECT tid, target_taxon_id, target_organism_name,
+                target_is_species_group, target_chembl_id, target_name
+            FROM base_targets
+            WHERE target_type = 'SINGLE PROTEIN'
+
+            UNION ALL
+
+            SELECT
+            t_child.tid,
+            t_child.tax_id             AS target_taxon_id,
+            t_child.organism           AS target_organism_name,
+            t_child.species_group_flag AS target_is_species_group,
+            t_child.chembl_id          AS target_chembl_id,
+            t_child.pref_name          AS target_name
+            FROM base_targets bt
+            JOIN target_relations  tr      ON bt.tid = tr.tid
+            JOIN target_dictionary t_child ON tr.related_tid = t_child.tid
+            AND t_child.target_type = 'SINGLE PROTEIN'
+            WHERE bt.target_type IN (
+                    'PROTEIN COMPLEX', 'PROTEIN FAMILY', 'PROTEIN COMPLEX GROUP'
+                )
+            AND tr.relationship = 'SUPERSET OF'
+        )
+
+        SELECT
+            r.target_taxon_id,
+            r.target_organism_name,
+            r.target_is_species_group,
+
             max(CASE WHEN cs.syn_type = 'GENE_SYMBOL'
-                     THEN cs.component_synonym END) AS target_gene_symbol,
+                    THEN cs.component_synonym END) AS target_gene_symbol,
 
-            -- first / representative EC number synonym
             max(CASE WHEN cs.syn_type = 'EC_NUMBER'
-                     THEN cs.component_synonym END) AS target_ec_number,
+                    THEN cs.component_synonym END) AS target_ec_number,
 
-            -- GO “process” terms aggregated as in your JSON:
-            -- IDs joined with ';', names joined with '; '
-            string_agg(DISTINCT CASE
-                                  WHEN cg.aspect = 'P'
-                                  THEN cg.pref_name
-                                END,
-                       ';')     AS target_go_process_id,
+            string_agg(DISTINCT CASE WHEN gc.aspect = 'P'
+                                    THEN gc.go_id END,
+                    ';')  AS target_go_process_id,
 
-            string_agg(DISTINCT CASE
-                                  WHEN cg.aspect = 'P'
-                                  THEN cg.pref_name
-                                END,
-                       '; ')    AS target_go_process_name,
+            string_agg(DISTINCT CASE WHEN gc.aspect = 'P'
+                                    THEN gc.pref_name END,
+                    '; ') AS target_go_process_name,
 
-            td.chembl_id   AS target_chembl_id,
-
-            -- Uniprot accession (component_sequences)
+            r.target_chembl_id,
             max(cseq.accession) AS target_uniprot_id,
+            r.target_name
 
-            td.pref_name   AS target_name
+        FROM resolved AS r
+        JOIN target_components      AS tc   ON r.tid = tc.tid
+        LEFT JOIN component_sequences AS cseq ON tc.component_id = cseq.component_id
+        LEFT JOIN component_synonyms  AS cs   ON tc.component_id = cs.component_id
+        LEFT JOIN component_go        AS cgo  ON tc.component_id = cgo.component_id
+        LEFT JOIN go_classification   AS gc   ON cgo.go_id = gc.go_id
 
-          FROM target_dictionary      AS td
-          JOIN target_type            AS tt   ON td.target_type = tt.target_type
-          JOIN target_components      AS tc   ON td.tid = tc.tid
-          LEFT JOIN component_sequences AS cseq
-                 ON tc.component_id = cseq.component_id
-          LEFT JOIN component_synonyms  AS cs
-                 ON tc.component_id = cs.component_id
-          LEFT JOIN (
-              SELECT * 
-              FROM component_go
-              LEFT JOIN go_classification        AS gc
-                 ON component_go.go_id = gc.go_id
-            )
-              AS cg
-                 ON tc.component_id = cg.component_id
-          
+        GROUP BY
+            r.target_taxon_id,
+            r.target_organism_name,
+            r.target_is_species_group,
+            r.target_chembl_id,
+            r.target_name
 
-          WHERE
-                td.target_type = 'SINGLE PROTEIN'
-            AND tt.parent_type = 'PROTEIN'
-            AND coalesce(td.species_group_flag, 0) = 0
-
-          GROUP BY
-            td.tax_id,
-            td.organism,
-            td.chembl_id,
-            td.pref_name
-
-          ORDER BY
-            td.tax_id,
-            td.chembl_id
+        ORDER BY
+            r.target_taxon_id,
+            r.target_chembl_id
         ) TO 'chembl_targets.tsv' (HEADER, DELIMITER '\\t');
         EOF
 
-        # Optional: mimic your old sort-by-tax-id + uniq behaviour explicitly
         head -n1 chembl_targets.tsv \
           | cat - <(tail -n+2 chembl_targets.tsv | sort -u | sort -k1) \
           > chembl_targets-sorted.tsv
@@ -805,7 +820,7 @@ process fetch_chembl_inhibitors {
         # == Get assays
         root_url="${chembl_url}/chembl/api/data/assay.json"
 
-        query="assay_type__in=F,B&confidence_score__gte=6"
+        query="target_chembl_id__in=${target_ids.join(",")}&assay_type__in=F,B&confidence_score__gte=6"
         init_url="\${root_url}?\${query}&limit=0"
 
         header=(assay_chembl_id assay_type target_chembl_id assay_target_confidence_score)
@@ -929,7 +944,8 @@ process fetch_chembl_inhibitors {
 
 process fetch_chembl_compound_mechanisms {
 
-    tag "v${chembl_version}:${target_ids[0]}...${target_ids[-1]}"
+    // tag "v${chembl_version}:${target_ids[0]}...${target_ids[-1]}"
+    tag "v${chembl_version}"
     stageInMode 'link'
     // maxForks 2
     
@@ -937,20 +953,27 @@ process fetch_chembl_compound_mechanisms {
     // errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
     maxRetries 5
 
+    // publishDir( 
+    //     "${params.outputs}/mechanism/by-target",
+    //     mode: 'copy',
+    //     saveAs: { "${target_ids[0]}-${target_ids[-1]}.${it}" },
+    // )
+
     publishDir( 
-        "${params.outputs}/mechanism/by-target",
+        "${params.outputs}/mechanism",
         mode: 'copy',
-        saveAs: { "${target_ids[0]}-${target_ids[-1]}.${it}" },
+        saveAs: { "all.${it}" },
     )
     
     input:
-    val target_ids
+    // val target_ids  // currently ignored
     val chembl_url
     val chembl_version
     path chembl_db
 
     output:
-    tuple val( target_ids ), path( "compounds.tsv.gz" )
+    // tuple val( target_ids ), path( "compounds.tsv.gz" )
+    path "compounds.tsv.gz"
 
     script:
     if ( "${chembl_db}" == 'placeholder' ) {
@@ -994,24 +1017,24 @@ process fetch_chembl_compound_mechanisms {
         )
 
         root_url="${chembl_url}/chembl/api/data/mechanism.json"
-        header=(target_chembl_id molecule_chembl_id parent_molecule_chembl_id action_type mechanism_of_action max_phase)
+        header=(target_chembl_id molecule_chembl_id action_type mechanism_of_action max_phase)
         
         printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
         > mech.tsv
 
-        query="target_chembl_id__in=${target_ids.join(",")}&direct_interaction=1&molecular_mechanism=1"
+        query="direct_interaction=1&molecular_mechanism=1"
         init_url="\$root_url"'?limit=1000&'"\$query"
         
         fetch_json "\$init_url"
         jq -r '.page_meta.next' < response.json > next_page.txt
-        parse_json < response.json >> inhibitors.tsv
+        parse_json < response.json >> mech.tsv
 
         np=\$(cat next_page.txt)
         while [ "\$np" != "null" ]
         do  
             sleep 0.3
             fetch_json "${chembl_url}\$np"
-            parse_json < response.json >> inhibitors.tsv
+            parse_json < response.json >> mech.tsv
             jq -r '.page_meta.next' < response.json > next_page.txt
             np=\$(cat next_page.txt)
         done
@@ -1020,52 +1043,69 @@ process fetch_chembl_compound_mechanisms {
         && mv mech-sorted.tsv mech.tsv
         gzip --best mech.tsv
 
-        # == Get all compounds from mech
+        # == Phase 1: fetch all compound forms for each mechanism molecule
+        parse_forms () (
+            jq -r --arg mol_id "\$1" \
+                '.molecule_forms[] | [\$mol_id, .molecule_chembl_id] | @tsv'
+        )
+        root_forms_url="${chembl_url}/chembl/api/data/molecule_form.json"
+
+        printf "molecule_chembl_id\\tform_chembl_id\\n" > forms.tsv
+
+        zcat mech.tsv.gz | tail -n+2 | cut -f2 | sort -u \
+        | while read mol_id
+        do
+            sleep \$SLEEP_TIME
+            fetch_json "\${root_forms_url}?molecule_chembl_id=\${mol_id}&limit=1000"
+            parse_forms "\$mol_id" < response.json >> forms.tsv
+            jq -r '.page_meta.next' < response.json > next_page.txt
+            np=\$(cat next_page.txt)
+            while [ "\$np" != "null" ]
+            do
+                sleep \$SLEEP_TIME
+                fetch_json "${chembl_url}\${np}"
+                parse_forms "\$mol_id" < response.json >> forms.tsv
+                jq -r '.page_meta.next' < response.json > next_page.txt
+                np=\$(cat next_page.txt)
+            done
+        done
+
+        # == Phase 2: fetch molecule data for all unique form IDs
         parse_mol () (
             jq -r '.molecules[] | [
-                .molecule_chembl_id, 
+                .molecule_chembl_id,
                 .pref_name,
                 .molecule_structures.standard_inchi_key,
                 .molecule_structures.smiles,
             ] | @tsv'
         )
-        root_url="${chembl_url}/chembl/api/data/molecule.json"
-        base_query=""
+        root_mol_url="\${chembl_url}/chembl/api/data/molecule.json"
 
-        header=(molecule_chembl_id molecule_name molecule_inchikey molecule_smiles)
-        
-        printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
-        > mol.tsv
-        
-        zcat mech.tsv.gz | tail -n+2 | while read target_line
+        printf "molecule_chembl_id\\tmolecule_name\\tmolecule_inchikey\\tmolecule_smiles\\n" > mol.tsv
+
+        form_ids=\$(tail -n+2 forms.tsv | cut -f2 | sort -u | paste -s -d,)
+        fetch_json "\${root_mol_url}?molecule_chembl_id__in=\${form_ids}&limit=1000"
+        parse_mol < response.json >> mol.tsv
+        jq -r '.page_meta.next' < response.json > next_page.txt
+        np=\$(cat next_page.txt)
+        while [ "\$np" != "null" ]
         do
             sleep \$SLEEP_TIME
-            target_id=\$(echo "\$target_line" | cut -f1)
-            query="target_chembl_id=\${target_id}"
-            init_url="\${root_url}?\${base_query}&\${query}&limit=0"
-
-            curl -s "\${init_url}" > response.json
-
+            fetch_json "${chembl_url}\${np}"
             parse_mol < response.json >> mol.tsv
             jq -r '.page_meta.next' < response.json > next_page.txt
-            while [ "\$(cat next_page.txt)" != "null" ]
-            do  
-                sleep \$SLEEP_TIME
-                curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
-                    "${chembl_url}\$(cat next_page.txt)" > response.json
-                parse_inhibition < response.json >> inhibition.tsv
-                jq -r '.page_meta.next' < response.json > next_page.txt
-            done  
+            np=\$(cat next_page.txt)
         done
-
+        
         python -c '
         import pandas as pd
 
         (
-            pd.merge(
-                pd.read_csv("mech.tsv.gz", sep="\\t"),
-                pd.read_csv("mol.tsv", sep="\\t"),
-            )
+            pd.read_csv("mech.tsv.gz", sep="\\t")
+            .merge(pd.read_csv("forms.tsv", sep="\\t"), on="molecule_chembl_id")
+            .drop(columns=["molecule_chembl_id"])
+            .rename(columns={"form_chembl_id": "molecule_chembl_id"})
+            .merge(pd.read_csv("mol.tsv", sep="\\t"), on="molecule_chembl_id")
             .drop_duplicates()
             .to_csv("compounds.tsv.gz", sep="\\t", index=False)
         )
@@ -1089,24 +1129,81 @@ process fetch_chembl_compound_mechanisms {
         ATTACH '${chembl_db}' AS chembl (TYPE sqlite, READ_ONLY);
         USE chembl;
         COPY (
+            WITH mech_raw AS (
+                SELECT
+                    t.chembl_id              AS target_chembl_id,
+                    t.target_type            AS target_type,
+                    mech.molregno            AS mech_molregno,
+                    mech.action_type         AS action_type,
+                    mech.mechanism_of_action AS mechanism_of_action
+                FROM drug_mechanism    AS mech
+                JOIN target_dictionary AS t  ON mech.tid = t.tid
+                WHERE
+                        mech.direct_interaction  = 1
+                    AND mech.molecular_mechanism = 1
+            ),
+            -- Resolve PROTEIN_COMPLEX / PROTEIN_FAMILY to SINGLE_PROTEIN components
+            resolved_targets AS (
+                -- Already SINGLE_PROTEIN: pass through
+                SELECT
+                    mr.target_chembl_id,
+                    mr.mech_molregno,
+                    mr.action_type,
+                    mr.mechanism_of_action
+                FROM mech_raw AS mr
+                WHERE mr.target_type = 'SINGLE PROTEIN'
+
+                UNION ALL
+
+                -- Complex/family: map via target_relations → SINGLE PROTEIN children
+                SELECT
+                    t_child.chembl_id       AS target_chembl_id,
+                    mr.mech_molregno,
+                    mr.action_type,
+                    mr.mechanism_of_action
+                FROM mech_raw AS mr
+                JOIN target_dictionary AS t_parent
+                    ON mr.target_chembl_id = t_parent.chembl_id
+                JOIN target_relations AS tr
+                    ON t_parent.tid = tr.tid
+                JOIN target_dictionary AS t_child
+                    ON tr.related_tid = t_child.tid
+                    AND t_child.target_type = 'SINGLE PROTEIN'
+                WHERE mr.target_type IN ('PROTEIN COMPLEX', 'PROTEIN FAMILY',
+                                        'PROTEIN COMPLEX GROUP')
+                AND tr.relationship = 'SUPERSET OF'
+            ),
+            mech_with_parent AS (
+                SELECT DISTINCT
+                    mr.target_chembl_id,
+                    mr.action_type,
+                    mr.mechanism_of_action,
+                    mh.parent_molregno
+                FROM resolved_targets AS mr
+                JOIN molecule_hierarchy AS mh ON mr.mech_molregno = mh.molregno
+            ),
+            all_forms AS (
+                SELECT DISTINCT
+                    mp.target_chembl_id,
+                    mp.action_type,
+                    mp.mechanism_of_action,
+                    mh_child.molregno        AS form_molregno
+                FROM mech_with_parent AS mp
+                JOIN molecule_hierarchy AS mh_child
+                    ON mh_child.parent_molregno = mp.parent_molregno
+            )
             SELECT DISTINCT
-                t.chembl_id              AS target_chembl_id,
+                af.target_chembl_id,
                 md.chembl_id             AS molecule_chembl_id,
                 md.pref_name             AS molecule_name,
                 cs.standard_inchi_key    AS molecule_inchikey,
                 cs.canonical_smiles      AS molecule_smiles,
-                mech.action_type         AS action_type,
-                mech.mechanism_of_action AS mechanism_of_action,
+                af.action_type,
+                af.mechanism_of_action,
                 md.max_phase             AS max_phase
-            FROM drug_mechanism        AS mech
-            JOIN target_dictionary     AS t   ON mech.tid       = t.tid
-            JOIN molecule_dictionary   AS md  ON mech.molregno  = md.molregno
-            LEFT JOIN compound_structures cs
-                ON md.molregno = cs.molregno
-            WHERE
-                    mech.direct_interaction = 1
-                AND mech.molecular_mechanism = 1
-                AND t.chembl_id IN (${target_ids.collect { "'${it}'" }.join(',')})
+            FROM all_forms               AS af
+            JOIN molecule_dictionary     AS md  ON af.form_molregno = md.molregno
+            LEFT JOIN compound_structures AS cs ON af.form_molregno = cs.molregno
         ) TO 'compounds.tsv' (HEADER, DELIMITER '\\t');
         EOF
 
@@ -1163,7 +1260,7 @@ process fetch_pubchem_id {
         query="molecule_chembl_id__in=${chembl_id.join(",")}"
         init_url="\$root_url"'?limit=0&'"\$query"
         
-        header=(molecule_chembl_id molecule_name molecule_smiles molecule_inchikey is_oral is_topical is_parenteral is_orphan is_natural_product is_chemcial_probe has_black_box max_phase)
+        header=(molecule_chembl_id molecule_name molecule_smiles molecule_inchikey is_oral is_topical is_parenteral is_orphan is_natural_product is_chemical_probe has_black_box max_phase)
         
         printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
         > inhibitors.tsv
@@ -1218,7 +1315,7 @@ process fetch_pubchem_id {
                 md.parenteral         AS is_parenteral,
                 md.orphan             AS is_orphan,
                 md.natural_product    AS is_natural_product,
-                md.chemical_probe     AS is_chemcial_probe,
+                md.chemical_probe     AS is_chemical_probe,
                 md.black_box_warning  AS has_black_box,
                 md.max_phase          AS max_phase
             FROM molecule_dictionary md
@@ -1260,6 +1357,33 @@ process fetch_vendors {
     """
     set -eux
 
+    curl_with_retry () (
+        local key="\$1"
+        local max_attempts=5
+        local attempt=0
+        local wait=1
+
+        until [ "\$attempt" -ge "\$max_attempts" ]; do
+            curl -s --fail --request POST \
+                -H "accept: application/json" \
+                -H "Content-Type: application/json" \
+                -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+                --url "https://www.ebi.ac.uk/unichem/api/v1/compounds" \
+                --data '{"type": "inchikey", "compound": "'"\$key"'"}' \
+            > unichem-response.json \
+            && jq -e '.compounds // empty' unichem-response.json > /dev/null 2>&1 \
+            && return 0
+
+            attempt=\$(( attempt + 1 ))
+            echo "Retry \$attempt/\$max_attempts for \$key (waiting \${wait}s)" >&2
+            sleep "\$wait"
+            wait=\$(( wait * 2 ))
+        done
+
+        echo "Failed after \$max_attempts attempts for \$key" >&2
+        return 1
+    )
+
     parse_json_unichem () (
         jq -r '
         # helper: pick first source with given shortName, or {} if none
@@ -1294,17 +1418,7 @@ process fetch_vendors {
     for key in \$(zcat "${table}" | tail -n+2 | cut -f"\$inchikey_col")
     do
         sleep 0.1
-        curl -s --request POST \
-            -H "accept: application/json" \
-            -H "Content-Type: application/json" \
-            -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
-            --url https://www.ebi.ac.uk/unichem/api/v1/compounds \
-            --data '{
-                "type": "inchikey",
-                "compound": "'"\$key"'"
-            }' \
-        > unichem-response.json
-
+        curl_with_retry "\$key"
         parse_json_unichem < unichem-response.json \
         >> pubchem_ids.txt
     done

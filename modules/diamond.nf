@@ -38,6 +38,8 @@ process make_diamond_db {
 process diamond_blastp {
 
     tag "${id}"
+    errorStrategy "retry"  // sometimes Slurm randomly kills
+    maxRetries 2
 
     publishDir( 
         "${params.outputs}/blast-results", 
@@ -59,9 +61,9 @@ process diamond_blastp {
         --query "${queries}" \
         --db "${db}" \
         --ultra-sensitive \
-        --evalue 1e-3 \
+        --evalue 1e-2 \
         --outfmt 6 qseqid sseqid qlen slen length pident gapopen mismatch evalue bitscore \
-        --max-target-seqs 25 \
+        --max-target-seqs 5 \
         --threads ${task.cpus} \
     | sort -k6 -n \
     | awk -v OFS='\\t' -v header="\${header//,/\$'\\t'}" '

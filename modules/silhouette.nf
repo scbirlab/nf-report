@@ -27,7 +27,7 @@ process silhouette {
     from sklearn.metrics import silhouette_score
     from tqdm.auto import tqdm
 
-    BOOTSTRAP_N = 100
+    BOOTSTRAP_N = 1000
     figsave = figsaver(format="pdf", output_dir=".")
     rbh_m = pd.read_csv("${matrix}", sep="\\t", index_col=0)
     rbh_row_data = pd.read_csv("${rowdata}", sep="\\t", index_col=0)
@@ -49,14 +49,15 @@ process silhouette {
         print_err(labels)
         n_labels = len(set(labels))
         if n_labels > 2 and n_labels < (this_m.shape[0] - 2):
+            this_m_norm = this_m.values / this_m.values.sum(axis=1, keepdims=True)
             this_silhouette_score = silhouette_score(
-                this_m.values / this_m.values.sum(axis=1, keepdims=True),
+                this_m_norm,
                 labels,
             )
             random_scores = np.asarray([
                 silhouette_score(
-                    rng.permuted(this_m, axis=0),
-                    labels,
+                    this_m_norm,
+                    rng.permutation(labels),
                 ) for _ in range(BOOTSTRAP_N)
             ])
             scores.append({
@@ -87,6 +88,7 @@ process silhouette {
             data=scores,
             color="lightgrey",
         )
+    axes.set_xticks(axes.get_xticks(), axes.get_xticklabels(), rotation=90., ha='right')
     axes.set(
         xlabel="Level",
         ylabel="Silhouette score",

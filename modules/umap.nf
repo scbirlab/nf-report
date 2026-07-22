@@ -13,8 +13,8 @@ process umaps_of_rbh_matrix {
     tuple val( id ), path( matrix ), path( rowdata ), path( coldata )
 
     output:
-    tuple val( id ), path( 'umap-taxonomy.{pdf,csv}' ), emit: strains
-    tuple val( id ), path( 'umap-targets.{pdf,csv}' ), emit: targets
+    tuple val( id ), path( 'umap-taxonomy.{png,pdf,svg,csv}' ), emit: strains
+    tuple val( id ), path( 'umap-targets.{png,pdf,svg,csv}' ), emit: targets
     tuple val( id ), path( 'umap-targets-taxon.{png,csv}' ), emit: targets_taxon
 
 
@@ -29,12 +29,13 @@ process umaps_of_rbh_matrix {
     os.environ["NUMBA_CACHE_DIR"] = "numba"
 
     from carabiner import print_err
-    from carabiner.mpl import add_legend, grid, figsaver
+    from carabiner.mpl import add_legend, grid, figsaver, set_plot_palette
     import pandas as pd
     import numpy as np
     from umap import UMAP
 
-    figsave = figsaver(format="pdf", output_dir=".")
+    figsave = figsaver(format=["png", "pdf", "svg"], output_dir=".")
+    set_plot_palette("muted")
 
     rbh_m = pd.read_csv("${matrix}", sep="\\t", index_col=0)
     rbh_row_data = pd.read_csv("${rowdata}", sep="\\t", index_col=0)
@@ -46,9 +47,9 @@ process umaps_of_rbh_matrix {
 
     reducer = UMAP(
         # n_neighbors=100,
-        # min_dist=.5,
+        min_dist=.5,
         random_state=42,
-        # metric="cosine",
+        metric="cosine",
     )
     bacteria_embedding = pd.DataFrame(
         reducer.fit_transform(rbh_m.T),
@@ -80,7 +81,7 @@ process umaps_of_rbh_matrix {
     )
     axes[0].scatter(
         *bacteria_embedding.values.T,
-        s=.1,
+        s=2.,
         color="lightgrey",
     )
 
@@ -88,7 +89,7 @@ process umaps_of_rbh_matrix {
         axes[1].scatter(
             tax_data.values[:,0],
             tax_data.values[:,1],
-            s=.1,
+            s=2.,
             label=tax_order,
         )
 
@@ -101,7 +102,7 @@ process umaps_of_rbh_matrix {
     ):
         sc = ax.scatter(
             *bacteria_embedding.values.T,
-            s=.1,
+            s=2.,
             c=w.iloc[:,-1].values,
             cmap="magma",
             vmin=0., #vmax=1.,
@@ -120,7 +121,7 @@ process umaps_of_rbh_matrix {
     reducer = UMAP(
         # n_neighbors=50,
         min_dist=.5,
-        # metric="cosine",
+        metric="cosine",
         random_state=42,
     )
     target_embedding = pd.DataFrame(
@@ -130,28 +131,31 @@ process umaps_of_rbh_matrix {
     )
 
     fig, axes = grid(ncol=9, aspect_ratio=1.2, panel_size=4.)
-    axes[0].scatter(
+    sc = axes[0].scatter(
         *target_embedding.values.T,
         s=.1,
         color="lightgrey"
     )
+    sc.set_rasterized(True)
 
     for go_process, go_data in target_embedding.groupby("target_ec_number"):
-        axes[1].scatter(
+        sc = axes[1].scatter(
             go_data.values[:,0],
             go_data.values[:,1],
             s=.1,
             label=go_process,
         )
+        sc.set_rasterized(True)
     axes[1].set(title="EC number")
 
     for tax_l1, tax_data in target_embedding.groupby("target_taxon_l1"):
-        axes[2].scatter(
+        sc = axes[2].scatter(
             tax_data.values[:,0],
             tax_data.values[:,1],
             s=.1,
             label=tax_l1,
         )
+        sc.set_rasterized(True)
     axes[2].set(title="Taxon L1")
     add_legend(axes[2])
 
@@ -166,22 +170,25 @@ process umaps_of_rbh_matrix {
             cmap="magma",
             vmin=0., vmax=1.,
         )
+        sc.set_rasterized(True)
         fig.colorbar(sc, ax=ax, label=col)
         ax.set(title=col)
 
 
     for col, ax in zip(("target_is_human", "target_is_bacteria"), axes[7:]):
-        ax.scatter(
+        sc = ax.scatter(
             *target_embedding.values.T,
             s=.1,
             c="lightgrey",
         )
+        sc.set_rasterized(True)
         this_m = target_embedding.query(col)
-        ax.scatter(
+        sc = ax.scatter(
             *this_m.values.T,
             s=.1,
             c="C1",
         )
+        sc.set_rasterized(True)
         ax.set(title=col)
         
     for ax in axes:

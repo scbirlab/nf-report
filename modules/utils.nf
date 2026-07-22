@@ -2,6 +2,7 @@ process stack_tables {
 
     tag "${id} -> ${directory}/${id}.${filename}.gz"
     label 'big_mem'
+    time '1d'
     stageInMode 'link'
 
     publishDir( 
@@ -25,20 +26,32 @@ process stack_tables {
 
     from functools import partial
     from glob import glob
+    import gzip
 
-    import pandas as pd        
+    import pandas as pd
 
-    (
-        pd.concat(
-            map(
-                partial(pd.read_csv, sep="\\t"),
-                glob("table-*/*"),
-            ),
-            axis=0,
-        )
-        .drop_duplicates()
-        .to_csv("stacked.tsv.gz", sep="\\t", index=False)
-    )
+    reader = partial(pd.read_csv, sep="\\t")
+    files = glob("table-*/*")
+
+    trial = {f: reader(f, nrows=2) for f in files}
+    non_empty = [f for f, df in trial.items() if df.shape[0] > 0]
+    if len(non_empty) > 0:
+        heads = pd.concat([
+            trial[f] for f in non_empty
+        ], axis=0)
+        all_cols = heads.columns
+
+        with gzip.open("stacked.tsv.gz", "wb") as out:
+            for i, f in enumerate(non_empty):
+                df = reader(f).reindex(all_cols, axis=1)
+                df.to_csv(
+                    out, 
+                    sep="\\t", 
+                    index=False,
+                    header=i == 0,
+                )
+    else:
+        pd.DataFrame().to_csv("stacked.tsv.gz", sep="\\t", index=False)
     
     """
 }
@@ -190,11 +203,9 @@ process merge_tox_gnomad {
     import pandas as pd
 
     (
-        pd.merge(
-            (
-                pd.read_csv("${table1}", sep="\\t")
-                .query("target_taxon_id == 9606")
-            ),
+        pd.read_csv("${table1}", sep="\\t")
+        .query("target_taxon_id == 9606")
+        .merge(
             pd.read_csv("${table2}", sep="\\t"),
             how="${how}",
         )
@@ -238,7 +249,7 @@ process filter_target_list {
     tag "${id}: LOEUF ≤ ${min_loeuf}, ID > ${min_identity}"
 
     publishDir( 
-        "${params.outputs}/targets", 
+        "${params.outputs}/targets/conserved-hits", 
         mode: 'copy',
         saveAs: { "${id}.${it}" }
     )
@@ -318,6 +329,7 @@ process make_rbh_matrix {
     output:
     tuple val( id ), path( 'rbh.tsv.gz' ), emit: table
     tuple val( id ), path( 'rbh_m.tsv.gz' ), emit: matrix
+    tuple val( id ), path( 'rbh_m_coverage.tsv.gz' ), emit: matrix_coverage
     tuple val( id ), path( 'rbh_m.rowdata.tsv.gz' ), emit: row_data
     tuple val( id ), path( 'rbh_m.coldata.tsv.gz' ), emit: col_data
 
@@ -376,6 +388,20 @@ process make_rbh_matrix {
         .fillna(0.)
     )
     rbh_m.to_csv("rbh_m.tsv.gz", sep="\\t", index=True)
+    rbh_m_cov = (
+        rbh
+        .assign(ortholog_taxon_id=lambda x: x["ortholog_taxon_id"].astype(str))
+        .groupby(["target_uniprot_id", "ortholog_taxon_id"])
+        .tail(1)
+        .drop_duplicates()
+        .pivot(
+            index="target_uniprot_id",
+            columns="ortholog_taxon_id",
+            values="target_ortholog_coverage",
+        )
+        .fillna(0.)
+    )
+    rbh_m_cov.to_csv("rbh_m_coverage.tsv.gz", sep="\\t", index=True)
 
     tax_df = (
         pd.read_csv("${taxonomy}")

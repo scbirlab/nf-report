@@ -32,7 +32,7 @@ process describe {
 
     figsave = figsaver(
         output_dir="plots",
-        format="png",
+        format=["png", "svg", "pdf"],
         dpi=600,
     )
 
@@ -90,6 +90,7 @@ process find_coverage_cutoff {
     output:
     tuple val( id ), path( 'coverage-cutoff.txt' ), emit: cutoff
     tuple val( id ), path( 'plots/cov-cutoff*.{csv,png}' ), emit: plots
+    tuple val( id ), path( 'plots/rbh-before-after-hist.{csv,pdf}' ), emit: histograms
 
     script:
     """
@@ -102,7 +103,7 @@ process find_coverage_cutoff {
     os.environ["MPLCONFIGDIR"] = "mpl-tmp"
     
     from carabiner import print_err
-    from carabiner.mpl import figsaver, grid, scattergrid
+    from carabiner.mpl import add_legend, figsaver, grid, scattergrid
     import pandas as pd
     import numpy as np
     from sklearn.mixture import GaussianMixture
@@ -110,7 +111,7 @@ process find_coverage_cutoff {
 
     figsave = figsaver(
         output_dir="plots",
-        format="png",
+        format=["png", "svg", "pdf"],
         dpi=600,
     )
 
@@ -161,6 +162,7 @@ process find_coverage_cutoff {
     with open("coverage-cutoff.txt", "w") as f:
         print(COVERAGE_CUTOFF, file=f)
 
+    ## Plot profile likelihood
     fig, axes = grid()
     axes.plot(
         "cutoff",
@@ -179,6 +181,7 @@ process find_coverage_cutoff {
     )
     figsave(fig, "cov-cutoff-loglik", df=logprob)
 
+    ## Plot full grid of interactions
     df_sampled = df.sample(min(1_000_000, df.shape[0]), random_state=42)
     df_sampled = df_sampled.assign(**{col: df_sampled[col].astype(np.float64) for col in LOG_VALUES})
     fig, axes = scattergrid(
@@ -186,6 +189,8 @@ process find_coverage_cutoff {
         **scattergrid_kwargs,
     )
     figsave(fig, "cov-cutoff", df=df_sampled)
+
+    ## Plot smaller grid of interactions
     for _x, ax in zip(HIST_VALUES, axes[0]):
         if _x == "target_ortholog_coverage":
             plotf = ax.axvline
@@ -196,6 +201,7 @@ process find_coverage_cutoff {
     figsave(fig, "cov-cutoff2", df=df_sampled)
 
 
+    ## Plot smaller grid of interactions after RBH
     df_rbh = pd.read_csv("${rbh_table}", sep="\\t")
     rbh_sampled = df_rbh.sample(min(1_000_000, df_rbh.shape[0]))
     fig, axes = scattergrid(
@@ -207,6 +213,42 @@ process find_coverage_cutoff {
         plotf = ax.axhline
         plotf(COVERAGE_CUTOFF, color="lightgrey")
     figsave(fig, "cov-cutoff-rbh", df=rbh_sampled)
+
+
+    ## Plot historgram of identity and coverage before and after RBH
+    fig, axes = grid(ncol=len(HIST_VALUES), aspect_ratio=1.2)
+
+    for ax, col in zip(axes, HIST_VALUES):
+        for label, _df in zip(["full", "rbh"], [df, df_rbh]):
+            ax.hist(
+                col,
+                data=_df,
+                bins=80,
+                density=True,
+                label=label,
+                histtype="stepfilled",
+                edgecolor="dimgrey",
+                linewidth=1.,
+                alpha=.7,
+            )
+        ax.set(
+            xlabel=col,
+            ylabel="Density",
+        )
+    add_legend(ax)
+    figsaver(
+        output_dir="plots",
+        format="pdf",
+        dpi=600,
+    )(
+        fig, 
+        "rbh-before-after-hist", 
+        df=df_rbh
+            .assign(retained_in_rbh=True)
+            .merge(df, how="left")
+            .assign(retained_in_rbh=lambda x: x["retained_in_rbh"].fillna(False))
+        ,
+    )
 
     """
 

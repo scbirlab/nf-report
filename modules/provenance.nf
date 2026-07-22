@@ -33,7 +33,7 @@ process describe_provenance {
 
     figsave = figsaver(
         output_dir="plots",
-        format="png",
+        format=["png", "svg", "pdf"],
         dpi=600,
     )
 
