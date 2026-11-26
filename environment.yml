@@ -1,4 +1,4 @@
-name: nf-reclaim
+name: nf-report
 
 channels:
     - conda-forge

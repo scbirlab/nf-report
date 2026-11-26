@@ -16,14 +16,15 @@ process fetch_gnomad_constraints {
 
     script:
     """
-    curl https://storage.googleapis.com/gcp-public-data--gnomad/release/${version}/constraint/gnomad.v${version}.constraint_metrics.tsv > gnomad.v${version}.constraint_metrics.tsv
+    curl -v https://storage.googleapis.com/gcp-public-data--gnomad/release/${version}/constraint/gnomad.v${version}.constraint_metrics.tsv.bgz \
+    > gnomad.v${version}.constraint_metrics.tsv.gz
 
     python -c '
     import pandas as pd
     transcript = "protein_coding"
     (   
         pd.read_csv(
-            "gnomad.v${version}.constraint_metrics.tsv", 
+            "gnomad.v${version}.constraint_metrics.tsv.gz", 
             sep="\\t",
         )
         .query("gene.str.len() > 0")

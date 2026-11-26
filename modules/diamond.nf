@@ -2,6 +2,7 @@ process make_diamond_db {
 
     errorStrategy 'ignore'
     stageInMode 'link'
+    time '1h'
 
     tag "${id}"
 
@@ -40,6 +41,7 @@ process diamond_blastp {
     tag "${id}"
     errorStrategy "retry"  // sometimes Slurm randomly kills
     maxRetries 2
+    time '1h'
 
     publishDir( 
         "${params.outputs}/blast-results", 

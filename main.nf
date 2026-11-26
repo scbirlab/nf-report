@@ -4,7 +4,7 @@
 ========================================================================================
    Pipeline to identify orthologs that have purchasable inhibitors
 ========================================================================================
-   Github   : https://github.com/scbirlab/nf-reclaim
+   Github   : https://github.com/scbirlab/nf-report
    Contact  : Eachan Johnson <eachan.johnson@crick.ac.uk>
 ----------------------------------------------------------------------------------------
 */
@@ -108,6 +108,7 @@ include {
 } from './modules/provenance.nf'
 include { 
    silhouette;
+   silhouette_nmf;
 } from './modules/silhouette.nf'
 include { 
    fetch_taxonkit_db;
@@ -115,11 +116,12 @@ include {
 } from './modules/taxonkit.nf'
 include { 
    umaps_of_rbh_matrix;
+   umaps_of_rbh_nmf;
 } from './modules/umap.nf'
 include { 
    fetch_fastas_from_organism_id;
    fetch_fastas_from_uniprot_ids;
-   fetch_species_gene_names;
+   fetch_species_gene_names2 as fetch_species_gene_names;
 } from './modules/uniprot.nf'
 include { 
    stack_tables;
@@ -283,12 +285,9 @@ workflow {
       Channel.value( false ),
    )
 
-   merge_tables.out
-      .combine( fetch_gnomad_constraints.out )
-      .set { named_orthologs }
-
    merge_tables2(
-      named_orthologs,
+      merge_tables.out
+         .combine( fetch_gnomad_constraints.out ),
       Channel.value( "left" ),
       Channel.value( "targets/tables" ),
       Channel.value( "target_list.tsv" ),
@@ -296,7 +295,8 @@ workflow {
       | set { target_lists }
    
    fetch_species_gene_names(
-      target_lists.combine( fetch_target_taxonomy.out ),
+      target_lists
+         .combine( fetch_target_taxonomy.out ),
       Channel.value( "ortholog_uniprot_id" ),
    )
    stack_tables4(
@@ -314,6 +314,16 @@ workflow {
 
    make_rbh_matrix.out.matrix
       | factorise_nmf
+
+   factorise_nmf.out.factors
+      .combine(make_rbh_matrix.out.row_data, by: 0)
+      .combine(make_rbh_matrix.out.col_data, by: 0)
+      .tap { nmf_matrices }
+      | (
+         umaps_of_rbh_nmf
+         & silhouette_nmf
+      )
+
    make_rbh_matrix.out.matrix
       .combine(make_rbh_matrix.out.row_data, by: 0)
       .combine(make_rbh_matrix.out.col_data, by: 0)

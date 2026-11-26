@@ -17,7 +17,6 @@ process umaps_of_rbh_matrix {
     tuple val( id ), path( 'umap-targets.{png,pdf,svg,csv}' ), emit: targets
     tuple val( id ), path( 'umap-targets-taxon.{png,csv}' ), emit: targets_taxon
 
-
     script:
     """
     #!/usr/bin/env python
@@ -259,5 +258,184 @@ process umaps_of_rbh_matrix {
     figsaver(format="png", output_dir=".")(fig, "umap-targets-taxon", df=target_embedding.reset_index())
 
     
+    """
+}
+
+process umaps_of_rbh_nmf {
+
+    tag "${id}"
+    label 'big_mem'
+
+    publishDir( 
+        "${params.outputs}/targets/plots", 
+        mode: 'copy',
+        saveAs: { "${id}.${it}" }
+    )
+
+    input:
+    tuple val( id ), path( nmf ), path( rowdata ), path( coldata )
+
+    output:
+    tuple val( id ), path( 'umap-taxonomy-nmf.{png,pdf,svg,csv}' ), emit: strains
+    tuple val( id ), path( 'umap-targets-nmf.{png,pdf,svg,csv}' ), emit: targets
+    tuple val( id ), path( 'umap-targets-taxon-nmf.{png,csv}' ), emit: targets_taxon, optional: true
+
+    script:
+    """
+    #!/usr/bin/env python
+    import os 
+
+    os.makedirs("mpl", exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = os.path.abspath("mpl")
+    os.makedirs("fontconfig", exist_ok=True)
+    os.environ["XDG_CACHE_HOME"] = os.path.abspath("fontconfig")
+    os.makedirs("numba", exist_ok=True)
+    os.environ["NUMBA_CACHE_DIR"] = os.path.abspath("numba")
+
+    from carabiner import print_err
+    from carabiner.mpl import add_legend, grid, figsaver, set_plot_palette
+    import pandas as pd
+    import numpy as np
+    from umap import UMAP
+
+    figsave = figsaver(format=["png", "pdf", "svg"], output_dir=".")
+    set_plot_palette("muted")
+
+    nmf_h = pd.read_csv("${nmf[0]}", sep="\\t", index_col=0)
+    nmf_w = pd.read_csv("${nmf[1]}", sep="\\t", index_col=0)
+    rbh_row_data = pd.read_csv("${rowdata}", sep="\\t", index_col=0)
+    rbh_col_data = pd.read_csv("${coldata}", sep="\\t", index_col=0)
+
+    nmf_w.index = pd.MultiIndex.from_frame(rbh_row_data.reset_index())
+    nmf_w.columns = [f"NMF_{i}" for i, _ in enumerate(nmf_w.columns)]
+    print_err(nmf_w.head())
+
+    nmf_h = nmf_h.T
+    nmf_h.index = pd.MultiIndex.from_frame(rbh_col_data.reset_index())
+    nmf_h.columns = [f"NMF_{i}" for i, _ in enumerate(nmf_h.columns)]
+    print_err(nmf_h.head())
+
+    reducer = UMAP(
+        # n_neighbors=100,
+        min_dist=.5,
+        random_state=42,
+        metric="cosine",
+    )
+    bacteria_embedding = pd.DataFrame(
+        reducer.fit_transform(nmf_h.fillna(0.)),
+        index=nmf_h.index,
+        columns=["UMAP 1", "UMAP 2"],
+    )
+
+    #assert rbh_m.index.get_level_values("target_is_human").values.any(), "No human targets present"
+    #assert rbh_m.index.get_level_values("target_is_bacteria").values.any(), "No bacterial targets present"
+
+    fig, axes = grid(
+        ncol=4, 
+        aspect_ratio=1.2, 
+        panel_size=4.,
+    )
+    axes[0].scatter(
+        *bacteria_embedding.values.T,
+        s=2.,
+        color="lightgrey",
+    )
+
+    for tax_order, tax_data in bacteria_embedding.groupby("ortholog_order"):
+        axes[1].scatter(
+            tax_data.values[:,0],
+            tax_data.values[:,1],
+            s=2.,
+            label=tax_order,
+        )
+
+    for ax in axes:
+        ax.set(
+            xlabel="UMAP 1",
+            ylabel="UMAP 2",
+        )
+    figsave(fig, "umap-taxonomy-nmf", df=bacteria_embedding.reset_index())
+
+    # ============================
+
+    reducer = UMAP(
+        # n_neighbors=50,
+        min_dist=.5,
+        metric="cosine",
+        random_state=42,
+    )
+    target_embedding = pd.DataFrame(
+        reducer.fit_transform(nmf_w.fillna(0.)),
+        index=nmf_w.index,
+        columns=["UMAP 1", "UMAP 2"],
+    )
+
+    fig, axes = grid(ncol=9, aspect_ratio=1.2, panel_size=4.)
+    sc = axes[0].scatter(
+        *target_embedding.values.T,
+        s=.1,
+        color="lightgrey",
+        rasterized=True,
+    )
+
+    for go_process, go_data in target_embedding.groupby("target_ec_number"):
+        sc = axes[1].scatter(
+            go_data.values[:,0],
+            go_data.values[:,1],
+            s=.1,
+            label=go_process,
+            rasterized=True,
+        )
+    axes[1].set(title="EC number")
+
+    for tax_l1, tax_data in target_embedding.groupby("target_taxon_l1"):
+        sc = axes[2].scatter(
+            tax_data.values[:,0],
+            tax_data.values[:,1],
+            s=.1,
+            label=tax_l1,
+            rasterized=True,
+        )
+    axes[2].set(title="Taxon L1")
+    add_legend(axes[2])
+
+    for col, ax in zip(
+        ("entropy", "sparsity", "mean_conservation", "median_conservation"), 
+        axes[3:],
+    ):
+        sc = ax.scatter(
+            *target_embedding.values.T,
+            s=.1,
+            c=rbh_row_data[col].loc[target_embedding.index.get_level_values("target_uniprot_id")].values,
+            cmap="magma",
+            vmin=0., vmax=1.,
+            rasterized=True,
+        )
+        fig.colorbar(sc, ax=ax, label=col)
+        ax.set(title=col)
+
+    for col, ax in zip(("target_is_human", "target_is_bacteria"), axes[7:]):
+        sc = ax.scatter(
+            *target_embedding.values.T,
+            s=.1,
+            c="lightgrey",
+            rasterized=True,
+        )
+        this_m = target_embedding.query(col)
+        sc = ax.scatter(
+            *this_m.values.T,
+            s=.1,
+            c="C1",
+            rasterized=True,
+        )
+        ax.set(title=col)
+        
+    for ax in axes:
+        ax.set(
+            xlabel="UMAP 1",
+            ylabel="UMAP 2",
+        )
+    figsave(fig, "umap-targets-nmf", df=target_embedding.reset_index())
+
     """
 }

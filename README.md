@@ -1,6 +1,6 @@
 # nf-report pipeline
 
-![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/scbirlab/nf-reclaim/nf-test.yml)
+![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/scbirlab/nf-report/nf-test.yml)
 [![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A523.10.0-23aa62.svg)](https://www.nextflow.io/)
 [![run with conda](https://img.shields.io/badge/run%20with-conda-3EB049?labelColor=000000&logo=anaconda)](https://docs.conda.io/en/latest/)
 [![run with docker](https://img.shields.io/badge/run%20with-docker-0db7ed?labelColor=000000&logo=docker)](https://www.docker.com/)
@@ -96,7 +96,7 @@ Here's what the flags mean:
 
 ### Running with Singularity, Docker, or Conda
 
-**scbirlab/nf-reclaim** runs on a Singularity container engine by default to ensure software versions are consistent. If you have 
+**scbirlab/nf-report** runs on a Singularity container engine by default to ensure software versions are consistent. If you have 
 docker installed, you can run using `-with-docker` to use it instead, or if you have Conda you can run `-with-conda`.
 
 ### Running more than one query in parallel
@@ -106,7 +106,7 @@ optionally, a [`nextflow.config` file](#inputs) in the directory where you want 
 Then simply run:
 
 ```bash 
-nextflow run scbirlab/nf-reclaim
+nextflow run scbirlab/nf-report
 ```
 
 ### Pipeline versions
@@ -114,10 +114,10 @@ nextflow run scbirlab/nf-reclaim
 If you want to run a particular tagged version of the pipeline, such as `v0.0.2`, you can do so using
 
 ```bash 
-nextflow run scbirlab/nf-reclaim -r v0.0.2
+nextflow run scbirlab/nf-report -r v0.0.2
 ```
 
-For help, use `nextflow run scbirlab/nf-reclaim --help`.
+For help, use `nextflow run scbirlab/nf-report --help`.
 
 The first time you run the pipeline on your system, the software dependencies in `environment.yml` will be installed. 
 This may take several minutes.
@@ -129,7 +129,7 @@ This may take several minutes.
 The pipeline can be run with command-line arguments:
 
 ```bash
-nextflow run scbirlab/nf-reclaim --organism_id <taxon ID>
+nextflow run scbirlab/nf-report --organism_id <taxon ID>
 ```
 
 The following parameters are **required**:
@@ -154,7 +154,7 @@ The following parameters have default options, and are **optional**.
 
 You can run multiple combinations in one command using a sample sheet. The sample sheet is a **CSV** file with one row per combination of parameters to run. 
 ```bash
-nextflow run scbirlab/nf-reclaim --sample_sheet path/to/sample-sheet.csv
+nextflow run scbirlab/nf-report --sample_sheet path/to/sample-sheet.csv
 ```
 
 #### Sample sheet structure
@@ -194,7 +194,7 @@ Outputs are saved in the `output` folder defined above.
 
 ## Issues, problems, suggestions
 
-Add to the [issue tracker](https://www.github.com/scbirlab/nf-reclaim/issues).
+Add to the [issue tracker](https://www.github.com/scbirlab/nf-report/issues).
 
 ## Further help
 
