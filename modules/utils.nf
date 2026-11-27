@@ -1,3 +1,5 @@
+include { rbh_py } from './snippets.nf'
+
 process stack_tables {
 
     tag "${id} -> ${directory}/${id}.${filename}.gz"
@@ -172,6 +174,8 @@ process filter_target_list {
     with open("${min_coverage}", "r") as f:
         COVERAGE_CUTOFF = float(f.readlines()[0])
 
+    ${rbh_py()}
+
     mammalia = "Mammalia"
     df = pd.read_csv("${table}", sep="\\t")
 
@@ -196,11 +200,7 @@ process filter_target_list {
             ),
             ortholog_taxon_id="${id}",
         )
-        .sort_values("bit_score")
-        .groupby(["target_taxon_id", "target_uniprot_id", "ortholog_taxon_id"])
-        .tail(1)
-        .groupby(["target_taxon_id", "ortholog_taxon_id", "ortholog_uniprot_id"])
-        .tail(1)
+        .pipe(best_reciprocal_hits)
         .drop_duplicates()
         .query(
             "(target_taxon_id == 9606 or target_taxon_l2 != @mammalia) "
@@ -276,44 +276,32 @@ process make_rbh_matrix {
         
 
 
+    ${rbh_py()}
+
+
+    def pivot_to_matrix(rbh, values):
+        return (
+            rbh
+            .assign(ortholog_taxon_id=lambda x: x["ortholog_taxon_id"].astype(str))
+            .groupby(["target_uniprot_id", "ortholog_taxon_id"])
+            .tail(1)
+            .drop_duplicates()
+            .pivot(
+                index="target_uniprot_id",
+                columns="ortholog_taxon_id",
+                values=values,
+            )
+            .fillna(0.)
+        )
+
+
     df = pd.read_csv("${table}", sep="\\t")
 
-    rbh = (
-        df
-        .sort_values("bit_score")
-        .groupby(["target_taxon_id", "target_uniprot_id", "ortholog_taxon_id"])
-        .tail(1)
-        .groupby(["target_taxon_id", "ortholog_taxon_id", "ortholog_uniprot_id"])
-        .tail(1)
-    )
+    rbh = best_reciprocal_hits(df)
     rbh.to_csv("rbh.tsv.gz", sep="\\t", index=False)
-    rbh_m = (
-        rbh
-        .assign(ortholog_taxon_id=lambda x: x["ortholog_taxon_id"].astype(str))
-        .groupby(["target_uniprot_id", "ortholog_taxon_id"])
-        .tail(1)
-        .drop_duplicates()
-        .pivot(
-            index="target_uniprot_id",
-            columns="ortholog_taxon_id",
-            values="target_ortholog_identity",
-        )
-        .fillna(0.)
-    )
+    rbh_m = pivot_to_matrix(rbh, "target_ortholog_identity")
     rbh_m.to_csv("rbh_m.tsv.gz", sep="\\t", index=True)
-    rbh_m_cov = (
-        rbh
-        .assign(ortholog_taxon_id=lambda x: x["ortholog_taxon_id"].astype(str))
-        .groupby(["target_uniprot_id", "ortholog_taxon_id"])
-        .tail(1)
-        .drop_duplicates()
-        .pivot(
-            index="target_uniprot_id",
-            columns="ortholog_taxon_id",
-            values="target_ortholog_coverage",
-        )
-        .fillna(0.)
-    )
+    rbh_m_cov = pivot_to_matrix(rbh, "target_ortholog_coverage")
     rbh_m_cov.to_csv("rbh_m_coverage.tsv.gz", sep="\\t", index=True)
 
     tax_df = (
@@ -336,15 +324,6 @@ process make_rbh_matrix {
         .tail(1)
         .set_index("target_uniprot_id")
         .loc[rbh_m.index]
-        .assign(
-            entropy=_entropy(rbh_m, axis=1),
-            sparsity=sparsity_index(rbh_m, axis=1),
-            mean_conservation=rbh_m.values.mean(axis=1),
-            median_conservation=np.median(rbh_m.values, axis=1),
-        )
-    )
-    rbh_row_data = (
-        rbh_row_data
         .assign(
             entropy=_entropy(rbh_m, axis=1),
             sparsity=sparsity_index(rbh_m, axis=1),

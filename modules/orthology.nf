@@ -1,3 +1,5 @@
+include { plot_constants_py } from './snippets.nf'
+
 process describe {
 
     tag "${id}"
@@ -36,22 +38,7 @@ process describe {
         dpi=600,
     )
 
-    HIST_VALUES = (
-        "alignment_length",
-        "mismatches",
-        "gap_openings",
-        "target_ortholog_identity",
-        "target_ortholog_coverage",
-        "e_value",
-        "bit_score",
-    )
-    LOG_VALUES = (
-        "e_value",
-        "bit_score",
-        "alignment_length",
-        "mismatches",
-        "gap_openings",
-    )
+    ${plot_constants_py()}
 
     df = pd.read_csv("${table}", sep="\\t")
     print(f"{df['ortholog_taxon_id'].nunique()=}", file=sys.stderr)
@@ -115,22 +102,7 @@ process find_coverage_cutoff {
         dpi=600,
     )
 
-    HIST_VALUES = (
-        "alignment_length",
-        "mismatches",
-        "gap_openings",
-        "target_ortholog_identity",
-        "target_ortholog_coverage",
-        "e_value",
-        "bit_score",
-    )
-    LOG_VALUES = (
-        "e_value",
-        "bit_score",
-        "alignment_length",
-        "mismatches",
-        "gap_openings",
-    )
+    ${plot_constants_py()}
 
     RBH_KEYS = [
         "target_taxon_id", 
