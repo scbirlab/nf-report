@@ -110,74 +110,45 @@ process describe_provenance {
         "ortholog_uniprot_id",
     )
 
-    fig, axes = grid(
-        ncol=target_ortholog_df["group"].nunique(), 
-        nrow=len(taxonomy_levels), 
-        aspect_ratio=2.5,
-    )
-    results = []
-    for axcol, (gname, g_df) in zip(axes.T, target_ortholog_df.groupby("group")):
-        for ax, tax in zip(axcol, taxonomy_levels):
-            df_grouped = (
-                g_df
-                .groupby(tax)
-                [list(cats_to_count)]
-                .sum()
-            )
-            df_grouped_norm = df_grouped / df_grouped.sum(axis=0)
-            df_grouped_norm = (
-                df_grouped_norm
-                .reset_index()
-                .melt(id_vars=tax)
-                .set_index(["variable", tax])
-            )
-            results.append(
-                df_grouped
-                .rename(columns={tax: "category_level"})
-                .assign(category=tax)
-            )
-            df_grouped_norm.unstack().plot.barh(stacked=True, ax=ax)
-            ax.set(ylabel="", title=f"{gname} : {tax}")
-            sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
-    results = pd.concat(results, axis=0)
-    figsave(fig, "target-proportions", df=results)
+    def plot_proportions(summary_df, taxonomy_levels, figname):
+        fig, axes = grid(
+            ncol=summary_df["group"].nunique(), 
+            nrow=len(taxonomy_levels), 
+            aspect_ratio=2.5,
+        )
+        results = []
+        for axcol, (gname, g_df) in zip(axes.T, summary_df.groupby("group")):
+            for ax, tax in zip(axcol, taxonomy_levels):
+                df_grouped = (
+                    g_df
+                    .groupby(tax)
+                    [list(cats_to_count)]
+                    .sum()
+                )
+                df_grouped_norm = df_grouped / df_grouped.sum(axis=0)
+                df_grouped_norm = (
+                    df_grouped_norm
+                    .reset_index()
+                    .melt(id_vars=tax)
+                    .set_index(["variable", tax])
+                )
+                results.append(
+                    df_grouped
+                    .rename(columns={tax: "category_level"})
+                    .assign(category=tax)
+                )
+                df_grouped_norm.unstack().plot.barh(stacked=True, ax=ax)
+                ax.set(ylabel="", title=f"{gname} : {tax}")
+                sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
+        figsave(fig, figname, df=pd.concat(results, axis=0))
 
-    
-    taxonomy_levels = taxonomy_levels[:-1]
-    fig, axes = grid(
-        ncol=target_ortholog_df["group"].nunique(), 
-        nrow=len(taxonomy_levels), 
-        aspect_ratio=2.5,
+
+    plot_proportions(target_ortholog_df, taxonomy_levels, "target-proportions")
+    plot_proportions(
+        target_ortholog_df.query("not target_is_bacteria"),
+        taxonomy_levels[:-1],
+        "target-proportions-no-bacteria",
     )
-    results = []
-    for axcol, (gname, g_df) in zip(
-        axes.T, 
-        target_ortholog_df.query("not target_is_bacteria").groupby("group"),
-    ):
-        for ax, tax in zip(axcol, taxonomy_levels):
-            df_grouped = (
-                g_df
-                .groupby(tax)
-                [list(cats_to_count)]
-                .sum()
-            )
-            results.append(
-                df_grouped
-                .rename(columns={tax: "category_level"})
-                .assign(category=tax)
-            )
-            df_grouped_norm = df_grouped / df_grouped.sum(axis=0)
-            df_grouped_norm = (
-                df_grouped_norm
-                .reset_index()
-                .melt(id_vars=tax)
-                .set_index(["variable", tax])
-            )
-            df_grouped_norm.unstack().plot.barh(stacked=True, ax=ax)
-            ax.set(ylabel="", title=f"{gname} : {tax}")
-            sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
-    results = pd.concat(results, axis=0)
-    figsave(fig, "target-proportions-no-bacteria", df=results)
 
     """
 }
