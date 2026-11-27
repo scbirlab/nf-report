@@ -20,12 +20,9 @@ jobs:
         sudo docker builder prune -a
     - run: df -h
     - uses: actions/checkout@v4
-    - uses: conda-incubator/setup-miniconda@v2
-      with:
-        python-version: 3.11
-        channels: conda-forge,bioconda,defaults 
-        channel-priority: true
     - uses: nf-core/setup-nextflow@v1
+      with:
+        version: 25
     - name: Test Nextflow pipeline
       run: |
         set -x

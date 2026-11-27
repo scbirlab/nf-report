@@ -1,17 +1,21 @@
-name: nf-reclaim
+name: nf-report
 
 channels:
     - conda-forge
     - bioconda
 
 dependencies:
-    - python==3.12
+    - python>=3.13
     - pip
-    - conda-forge::ca-certificates
-    - conda-forge::curl
     - conda-forge::jq
-    - conda-forge::wget
+    - conda-forge::duckdb-cli
     - bioconda::diamond
+    - bioconda::taxonkit
     - pip:
-        - "schemist>=0.0.4.post1"
+        - "carabiner-tools[pd,mpl]>=0.0.5.post3"
+        - "numpy"
+        - "scikit-learn"
+        - "schemist>=0.1.4"
+        - "seaborn"
+        - "umap-learn>=0.5.7"
         
