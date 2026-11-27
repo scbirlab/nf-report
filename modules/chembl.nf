@@ -413,7 +413,7 @@ process fetch_chembl_inhibitors {
     tag "v${chembl_version}:${target_ids[0]}...${target_ids[-1]}: pChEMBL ≥ ${min_pchembl}"
     stageInMode 'link'
     
-    errorStrategy { if ( "${chembl_db}" == 'placeholder' ) { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' } else { return 'terminate' } }
+    errorStrategy { "${chembl_db}" == 'placeholder' ? 'retry' : 'terminate' }  // back-off is in the script, not the scheduler
     maxRetries 5
 
     publishDir( 
@@ -436,6 +436,7 @@ process fetch_chembl_inhibitors {
     if ( "${chembl_db}" == 'placeholder' ) {
         """
         set -euox pipefail
+        sleep \$(( ( ${task.attempt} - 1 ) * 10 ))  # back off between task retries
 
         fetch_json() (
             local url="\$1"
@@ -624,7 +625,7 @@ process fetch_chembl_compound_mechanisms {
     tag "v${chembl_version}"
     stageInMode 'link'
     
-    errorStrategy { if ( "${chembl_db}" == 'placeholder' ) { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' } else { return 'terminate' } }
+    errorStrategy { "${chembl_db}" == 'placeholder' ? 'retry' : 'terminate' }  // back-off is in the script, not the scheduler
     maxRetries 5
 
     publishDir( 
@@ -645,6 +646,7 @@ process fetch_chembl_compound_mechanisms {
     if ( "${chembl_db}" == 'placeholder' ) {
         """
         set -euox pipefail
+        sleep \$(( ( ${task.attempt} - 1 ) * 10 ))  # back off between task retries
         SLEEP_TIME=0.3  # seconds between paged API requests
         UA='scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)'
 
@@ -1017,7 +1019,7 @@ process fetch_vendors {
     tag "${chembl_id[0]}...${chembl_id[-1]}"
     stageInMode 'link'
 
-    errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' }
+    errorStrategy 'retry'
     maxRetries 5
     
     input:
@@ -1030,6 +1032,7 @@ process fetch_vendors {
 
     """
     set -eux
+    sleep \$(( ( ${task.attempt} - 1 ) * 10 ))  # back off between task retries
 
     curl_with_retry () (
         local key="\$1"

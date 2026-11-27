@@ -7,7 +7,7 @@ process fetch_chembl_tox {
         mode: 'copy',
     )
     
-    errorStrategy { if ( "${chembl_db}" == 'placeholder' ) { sleep(Math.pow(2, task.attempt) * 200 as long); return 'retry' } else { return 'terminate' } }
+    errorStrategy { "${chembl_db}" == 'placeholder' ? 'retry' : 'terminate' }  // back-off is in the script, not the scheduler
     maxRetries 5
 
     input:
@@ -23,6 +23,7 @@ process fetch_chembl_tox {
     if ( "${chembl_db}" == 'placeholder' ) {
     """
     set -x
+    sleep \$(( ( ${task.attempt} - 1 ) * 10 ))  # back off between task retries
     # == config 
     SLEEP_TIME=0.3
 
