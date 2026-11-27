@@ -156,7 +156,7 @@ workflow {
    Channel.value( 
       params.chembl_db 
       ? file( params.chembl_db, checkIfExists: true ) 
-      : file( 'placeholder' ) 
+      : file( "${projectDir}/assets/placeholder" )  // must exist: some processes stage it with stageInMode 'link'
    )
       .set { chembl_db }
 
@@ -176,11 +176,10 @@ workflow {
 
    else {
 
-      Channel.of( "organism_id", "${params.organism_id}" )
+      // One element, so header and row cannot be re-ordered by collectFile
+      Channel.of( "organism_id\n${params.organism_id}\n" )
          .collectFile( 
             name: "sample-sheet.csv", 
-            keepHeader: true, 
-            newLine: true, 
             storeDir: "${params.outputs}/sample-sheet",
          )
          .set { sample_sheet_ch }
@@ -240,6 +239,8 @@ workflow {
          elem: 0,
          sep: '\t',
       )
+      // targets without a UniProt accession stay in the ChEMBL table but cannot be queried for sequences
+      .filter { v -> v.target_uniprot_id && v.target_uniprot_id != 'NA' }
       .map { v -> tuple( v.target_uniprot_id, v.target_chembl_id ) }
       .unique()
       .set { id_to_uniprot_to_chembl }
@@ -255,9 +256,9 @@ workflow {
       )
       | fetch_fastas_from_uniprot_ids
    
-   fetch_fastas_from_uniprot_ids.out
+   fetch_fastas_from_uniprot_ids.out.fasta
       .collectFile( 
-         name: "canonical-targets.fasta", 
+         name: "canonical-targets.fasta.gz", 
          storeDir: "${params.outputs}/target-sequences",
       )
       .set { uniprot_fastas }

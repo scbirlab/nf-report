@@ -109,6 +109,7 @@ process fetch_chembl_tox {
     tail -n+2 chembl_assays.tsv | cut -f"\$assay_id_col" | sort -u |split -l 20 - 'ids_'
     for id_file in ids_*
     do
+        [ -e "\$id_file" ] || continue
         sleep \$SLEEP_TIME
         ids=\$(tr \$'\\n' , < "\$id_file")
         query="assay_chembl_id__in=\${ids}"
@@ -142,6 +143,7 @@ process fetch_chembl_tox {
     tail -n+2 chembl_ic50.tsv | cut -f"\$mol_col" | sort -u | split -l 20 - 'mols_'
     for id_file in mols_*
     do
+        [ -e "\$id_file" ] || continue
         sleep \$SLEEP_TIME
         ids=\$(tr \$'\\n' , < "\$id_file")
         query="molecule_chembl_id__in=\${ids}"

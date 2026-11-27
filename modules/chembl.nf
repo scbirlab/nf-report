@@ -54,7 +54,31 @@ process fetch_chembl_targets {
     script:
     if ( "${chembl_db}" == 'placeholder' ) {
         """
-        set -x
+        set -euxo pipefail
+
+        fetch_json() (
+            local url="\$1"
+            local tries=8
+            local delay=2
+            for i in \$(seq 1 \$tries)
+            do
+                if curl -sS --fail-with-body \
+                    -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+                    -H 'Accept: application/json' \
+                    -D headers.txt \
+                    -o response.json \
+                    --connect-timeout 10 --max-time 120 \
+                    "\$url"
+                then
+                    head -c1 response.json | grep -q '[\\{[]' && return 0
+                fi
+                echo "WARN: attempt \$i failed for \$url" >&2
+                sleep "\$((delay ** i))"
+            done
+            echo "ERROR: giving up on \$url" >&2
+            return 1
+        )
+
         parse_json () (
             jq -r '
                 .targets[]
@@ -97,7 +121,7 @@ process fetch_chembl_targets {
                         // "NA"
                     ),
                     .target_chembl_id, 
-                    .target_components[0].accession, 
+                    (.target_components[0].accession // "NA"), 
                     .pref_name
                 ] 
                 | @tsv
@@ -105,26 +129,53 @@ process fetch_chembl_targets {
         )
 
         root_url="${chembl_url}/chembl/api/data/target.json"
-        query="" #"target_type=SINGLE%20PROTEIN"
+        query="target_type=SINGLE%20PROTEIN"
         init_url="\${root_url}?\${query}&limit=0"
         header=(target_taxon_id target_organism_name target_is_species_group target_gene_symbol target_ec_number target_go_process_id target_go_process_name target_chembl_id target_uniprot_id target_name)
         
         printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
         > chembl_targets.tsv
 
-        curl -s "\${init_url}" > response.json
+        # fetch_json writes response.json itself (-o) so a retry cannot append to a partial page,
+        # and fails the task if retries run out or the body is not JSON
+        check_page() {
+            # next must be present and either null or a non-empty string, so a malformed page
+            # cannot be mistaken for the last one
+            jq -e '
+                (.targets | type == "array")
+                and (.page_meta | type == "object")
+                and (.page_meta | has("next"))
+                and (.page_meta.next == null or ((.page_meta.next | type == "string") and (.page_meta.next | length > 0)))
+            ' response.json > /dev/null \
+            || { echo "ERROR: unexpected ChEMBL target page" >&2; return 1; }
+        }
 
+        fetch_json "\${init_url}"
+        check_page
+        expected_total=\$(jq -r '.page_meta.total_count // empty' response.json)
         parse_json < response.json >> chembl_targets.tsv
-        jq -r '.page_meta.next' < response.json > next_page.txt
+        jq -r '.page_meta.next // "null"' < response.json > next_page.txt
 
         while [ "\$(cat next_page.txt)" != "null" ]
         do  
+            [ -s next_page.txt ] || { echo "ERROR: empty next page URL" >&2; exit 1; }
             sleep 0.3
-            curl -s -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
-                "${chembl_url}\$(cat next_page.txt)" > response.json
+            fetch_json "${chembl_url}\$(cat next_page.txt)"
+            check_page
             parse_json < response.json >> chembl_targets.tsv
-            jq -r '.page_meta.next' < response.json > next_page.txt
+            jq -r '.page_meta.next // "null"' < response.json > next_page.txt
         done    
+
+        # completeness: one row per target, as many as ChEMBL says there are
+        if [ -n "\$expected_total" ]
+        then
+            n_rows=\$(( \$(wc -l < chembl_targets.tsv) - 1 ))
+            if [ "\$n_rows" -ne "\$expected_total" ]
+            then
+                echo "ERROR: retrieved \$n_rows targets but ChEMBL reports \$expected_total" >&2
+                exit 1
+            fi
+        fi
 
         head -n1 chembl_targets.tsv \
         | cat - <(tail -n+2 chembl_targets.tsv | sort -u | sort -k1 ) \
@@ -415,7 +466,7 @@ process fetch_chembl_inhibitors {
                     .assay_chembl_id, 
                     .assay_type,
                     .target_chembl_id,
-                    .confidence_score,
+                    .confidence_score
                 ] | @tsv
             '
         )
@@ -427,9 +478,11 @@ process fetch_chembl_inhibitors {
                     .target_organism, 
                     .target_chembl_id, 
                     .target_pref_name, 
+                    .assay_chembl_id, 
                     .molecule_chembl_id, 
                     .molecule_pref_name, 
-                    .canonical_smiles
+                    .canonical_smiles,
+                    .pchembl_value
                 ] | @tsv' \
             | sort -u
         )
@@ -470,7 +523,7 @@ process fetch_chembl_inhibitors {
         root_url="${chembl_url}/chembl/api/data/activity.json"
         base_query="pchembl_value__gte=${min_pchembl}&potential_duplicate=0"
 
-        header=(target_taxon_id target_organism target_chembl_id target_name molecule_chembl_id molecule_name molecule_smiles)
+        header=(target_taxon_id target_organism_name target_chembl_id target_name assay_chembl_id molecule_chembl_id molecule_name molecule_smiles molecule_target_pchembl)
         
         printf "\$(IFS=\$'\\t'; echo "\${header[*]}")\\n" \
         > chembl_ic50.tsv
@@ -479,6 +532,7 @@ process fetch_chembl_inhibitors {
         tail -n+2 chembl_assays.tsv | cut -f"\$assay_id_col" | sort -u |split -l 20 - 'ids_'
         for id_file in ids_*
         do
+            [ -e "\$id_file" ] || continue
             ids=\$(tr \$'\\n' , < "\$id_file")
             query="assay_chembl_id__in=\${ids}"
             init_url="\${root_url}?\${base_query}&\${query}&limit=0"
@@ -502,6 +556,7 @@ process fetch_chembl_inhibitors {
             pd.merge(
                 pd.read_csv("chembl_assays.tsv", sep="\\t"),
                 pd.read_csv("chembl_ic50.tsv", sep="\\t"),
+                on=["assay_chembl_id", "target_chembl_id"],
             )
             .drop_duplicates()
             .to_csv("inhibitors.tsv.gz", sep="\\t", index=False)
@@ -545,7 +600,8 @@ process fetch_chembl_inhibitors {
             JOIN molecule_dictionary   AS md  ON act.molregno  = md.molregno
             LEFT JOIN compound_structures AS cs ON md.molregno = cs.molregno
             WHERE
-                    a.confidence_score >= 6
+                    a.assay_type IN ('F','B')
+                AND a.confidence_score >= 6
                 AND act.pchembl_value  >= ${min_pchembl}
                 AND COALESCE(act.potential_duplicate, 0) = 0
                 AND t.chembl_id IN (${target_ids.collect { "'${it}'" }.join(',')})
@@ -589,6 +645,7 @@ process fetch_chembl_compound_mechanisms {
     if ( "${chembl_db}" == 'placeholder' ) {
         """
         set -euox pipefail
+        SLEEP_TIME=0.3  # seconds between paged API requests
         UA='scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)'
 
         fetch_json() (
@@ -621,7 +678,7 @@ process fetch_chembl_compound_mechanisms {
                     .molecule_chembl_id,
                     .action_type,
                     .mechanism_of_action,
-                    .max_phase,
+                    .max_phase
                 ] | @tsv' \
             | sort -u
         )
@@ -686,25 +743,32 @@ process fetch_chembl_compound_mechanisms {
                 .molecule_chembl_id,
                 .pref_name,
                 .molecule_structures.standard_inchi_key,
-                .molecule_structures.smiles,
+                .molecule_structures.canonical_smiles
             ] | @tsv'
         )
         root_mol_url="\${chembl_url}/chembl/api/data/molecule.json"
 
         printf "molecule_chembl_id\\tmolecule_name\\tmolecule_inchikey\\tmolecule_smiles\\n" > mol.tsv
 
-        form_ids=\$(tail -n+2 forms.tsv | cut -f2 | sort -u | paste -s -d,)
-        fetch_json "\${root_mol_url}?molecule_chembl_id__in=\${form_ids}&limit=1000"
-        parse_mol < response.json >> mol.tsv
-        jq -r '.page_meta.next' < response.json > next_page.txt
-        np=\$(cat next_page.txt)
-        while [ "\$np" != "null" ]
+        # batch the form IDs so the request URL stays short, however many there are
+        tail -n+2 forms.tsv | cut -f2 | sort -u | split -l 50 - 'form_ids_'
+        for form_file in form_ids_*
         do
+            [ -e "\$form_file" ] || continue
+            form_ids=\$(paste -s -d, "\$form_file")
             sleep \$SLEEP_TIME
-            fetch_json "${chembl_url}\${np}"
+            fetch_json "\${root_mol_url}?molecule_chembl_id__in=\${form_ids}&limit=1000"
             parse_mol < response.json >> mol.tsv
             jq -r '.page_meta.next' < response.json > next_page.txt
             np=\$(cat next_page.txt)
+            while [ "\$np" != "null" ]
+            do
+                sleep \$SLEEP_TIME
+                fetch_json "${chembl_url}\${np}"
+                parse_mol < response.json >> mol.tsv
+                jq -r '.page_meta.next' < response.json > next_page.txt
+                np=\$(cat next_page.txt)
+            done
         done
         
         python -c '
