@@ -121,15 +121,13 @@ include {
 include { 
    fetch_fastas_from_organism_id;
    fetch_fastas_from_uniprot_ids;
-   fetch_species_gene_names2 as fetch_species_gene_names;
+   fetch_species_gene_names;
 } from './modules/uniprot.nf'
 include { 
    stack_tables;
    stack_tables as stack_tables2;
    stack_tables as stack_tables3;
    stack_tables as stack_tables4;
-   stack_tables as stack_tables6;
-   subset_table;
    filter_target_list;
    make_rbh_matrix;
    merge_tox_gnomad;
@@ -239,7 +237,7 @@ workflow {
       .map { it[-1] }
       .splitCsv( 
          header: true, 
-         elem: 0, //1, 
+         elem: 0,
          sep: '\t',
       )
       .map { v -> tuple( v.target_uniprot_id, v.target_chembl_id ) }
@@ -318,7 +316,6 @@ workflow {
    factorise_nmf.out.factors
       .combine(make_rbh_matrix.out.row_data, by: 0)
       .combine(make_rbh_matrix.out.col_data, by: 0)
-      .tap { nmf_matrices }
       | (
          umaps_of_rbh_nmf
          & silhouette_nmf
@@ -327,7 +324,6 @@ workflow {
    make_rbh_matrix.out.matrix
       .combine(make_rbh_matrix.out.row_data, by: 0)
       .combine(make_rbh_matrix.out.col_data, by: 0)
-      .tap { rbh_matrix }
       | (
          umaps_of_rbh_matrix 
          & silhouette
@@ -360,7 +356,6 @@ workflow {
          .combine( id_to_uniprot_to_chembl, by: 0 )  // uniprot_id, ID, chembl_id
          .map { v -> tuple( v[1], v[-1] ) }  // ID, chembl_id
          .unique()
-         .tap { org_id_to_target_chembl }
          .map { v -> v[-1] }
          .unique()
          .set { chembl_targets_conserved }
@@ -383,19 +378,10 @@ workflow {
       )
 
       fetch_chembl_compound_mechanisms(
-         // query_targets,
          chembl_url,
          chembl_version,
          chembl_db,
       )
-
-      // stack_tables6(
-      //    fetch_chembl_compound_mechanisms.out
-      //       .map { v -> tuple( "all", v[-1] ) }
-      //       .groupTuple( by: 0 ),
-      //    Channel.value( "mechanism" ),
-      //    Channel.value( "tsv" ),
-      // )
 
       stack_tables(
          fetch_chembl_inhibitors.out
@@ -411,7 +397,7 @@ workflow {
             header: true, 
             sep: '\t', 
             elem: 1, 
-            by: 1, //Math.min( params.batch_size, ( params.test ? 10 : 1000 ) ),
+            by: 1,
          )
          .set { inhibitors }
 
@@ -470,7 +456,6 @@ workflow {
          Channel.value( "inhibitors" ),
          Channel.value( "tsv" ),
       )
-         | set { pubchem_ids }
 
    }
    

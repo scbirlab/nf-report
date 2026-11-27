@@ -14,20 +14,10 @@ process make_diamond_db {
 
     script:
     """
-    if [ "${fasta}" == "*.gz" ]
-    then
-        FILE_SIZE=\$(gzip -l "${fasta}" | awk 'NR==2 {print \$2}')
-    elif [ -s "${fasta}" ]
-    then
-        FILE_SIZE=1
-    else
-        FILE_SIZE=0
-    fi
-
-    if [ "\$FILE_SIZE" -gt 0 ]
+    if [ -s "${fasta}" ]
     then
         diamond makedb --in "${fasta}" -d db.dmnd
-    else     
+    else
         echo "${fasta} is empty!"
         exit 1
     fi

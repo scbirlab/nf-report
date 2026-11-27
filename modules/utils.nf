@@ -57,53 +57,6 @@ process stack_tables {
 }
 
 
-process subset_table {
-
-    tag "${id}:${column} -> ${directory}/${id}.${filename}.gz"
-    label 'big_mem'
-    stageInMode 'link'
-
-    publishDir( 
-        "${params.outputs}/${directory}", 
-        mode: 'copy',
-        saveAs: { (directory && filename) ? "${id}.${filename}.gz" : null },
-    )
-
-
-    input:
-    tuple val( id ), path( tables, stageAs: 'table-?????/*' )
-    val column
-    val directory
-    val filename
-
-    output:
-    tuple val( id ), path( 'subset.tsv.gz' )
-
-    script:
-    """
-    #!/usr/bin/env python
-
-    from functools import partial
-    from glob import glob
-
-    import pandas as pd        
-
-    (
-        pd.concat(
-            map(
-                partial(pd.read_csv, sep="\\t"),
-                glob("table-*/*"),
-            ),
-            axis=0,
-        )
-        .query("${column} == '${id}'")
-        .to_csv("subset.tsv.gz", sep="\\t", index=False)
-    )
-    
-    """
-}
-
-
 process merge_tables {
 
     tag "${id}|${how} -> ${directory}/${id}.${filename}.gz"
@@ -141,39 +94,6 @@ process merge_tables {
         .drop_duplicates()
         .to_csv("merged.tsv.gz", sep="\\t", index=False)
     )
-
-    """
-}
-
-
-process split_csv {
-
-    tag "${id}:${table}"
-
-    // errorStrategy 'retry'  // sometimes container fails to load
-    // maxRetries 2
-
-    // publishDir( 
-    //     "${params.outputs}/${directory}", 
-    //     mode: 'copy',
-    //     saveAs: { (directory && filename) ? "${id}.${filename}" : null },
-    //     // enabled: { directory && filename },
-    // )
-
-    input:
-    tuple val( id ), path( table )
-    val chunksize
-
-    output:
-    tuple val( id ), path( 'chunk-*.tsv.gz' )
-
-    script:
-    """
-    #!/usr/bin/env python
-
-    import pandas as pd
-    for i, chunk in enumerate(pd.read_csv("${table1}", sep="\\t", chunksize=${chunksize})):
-        chunk.to_csv(f"chunk-{i}.tsv.gz", sep="\\t", index=False)   
 
     """
 }
@@ -226,24 +146,6 @@ process merge_tox_gnomad {
 }
 
 
-process concat_files {
-
-    tag "${id}"
-
-    input:
-    tuple val( id ), path( '*.txt' )
-
-    output:
-    tuple val( id ), path( 'concat.txt' )
-
-    script:
-    """
-    cat *.txt > concat.txt
-    
-    """
-}
-
-
 process filter_target_list {
 
     tag "${id}: LOEUF ≤ ${min_loeuf}, ID > ${min_identity}"
@@ -272,7 +174,6 @@ process filter_target_list {
 
     mammalia = "Mammalia"
     df = pd.read_csv("${table}", sep="\\t")
-    print(df.head())
 
     potentially_toxic_targets = set(
         df
@@ -363,7 +264,6 @@ process make_rbh_matrix {
 
 
     df = pd.read_csv("${table}", sep="\\t")
-    print(df.head())
 
     rbh = (
         df
