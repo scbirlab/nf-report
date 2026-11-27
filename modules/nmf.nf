@@ -67,7 +67,6 @@ process factorise_nmf {
         
         factorized = factorizer.fit(X)
         H, W = factorized.components_, factorizer.transform(X)
-        m_approx = W @ H
         return factorizer, (W, H), factorized.reconstruction_err_
 
 
