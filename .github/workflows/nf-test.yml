@@ -27,6 +27,8 @@ jobs:
         miniforge-version: latest
         channel-priority: strict
     - uses: nf-core/setup-nextflow@v1
+      with:
+        version: 25
     - name: Test Nextflow pipeline
       run: |
         set -x
