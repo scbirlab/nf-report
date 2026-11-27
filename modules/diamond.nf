@@ -1,6 +1,7 @@
 process make_diamond_db {
 
-    errorStrategy 'ignore'
+    // a failed database build would silently drop a species from the comparison, so stop instead
+    errorStrategy 'terminate'
     stageInMode 'link'
     time '1h'
 
@@ -48,6 +49,8 @@ process diamond_blastp {
 
     script:
     """
+    set -euo pipefail
+
     header="target_uniprot_id,ortholog_uniprot_id,target_accession,ortholog_accession,target_length,ortholog_length,alignment_length,target_ortholog_identity,gap_openings,mismatches,e_value,bit_score,target_ortholog_coverage"
     diamond blastp \
         --query "${queries}" \

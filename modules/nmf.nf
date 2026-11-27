@@ -52,6 +52,8 @@ process factorise_nmf {
         norm     = np.hypot(dx, dy)
         
         # perpendicular distance of every point to the chord
+        if norm == 0:
+            return x0, y0
         dist = np.abs(dy*(x - x0) - dx*(y - y0)) / norm
         knee_idx = dist.argmax()
         return x[knee_idx], y[knee_idx]
@@ -60,7 +62,7 @@ process factorise_nmf {
     def nmf(X, ncomps=2, max_iter=1_000, seed=42, **kwargs):
         factorizer = NMF(
             n_components=int(ncomps), #'auto',
-            max_iter=1_000,
+            max_iter=int(max_iter),
             random_state=seed,
             **kwargs,
         )
@@ -72,22 +74,33 @@ process factorise_nmf {
 
     def nmf_scan(X, num=10, max_iter=1_000, seed=42, **kwargs):
 
-        n_comps = list(
-            np.ceil(np.geomspace(2, min(max(1, *X.shape), 500) // 2, num=num))
-            .astype(int)
-        )
+        min_dim = min(X.shape)
+        if min_dim == 0:
+            raise ValueError(f"Cannot factorise an empty matrix with shape {X.shape}")
+        # rank cannot usefully exceed the smaller matrix dimension
+        max_comps = max(1, min(min_dim, 500) // 2)
+        min_comps = min(2, max_comps)
+        n_comps = [
+            int(k) for k in 
+            np.unique(np.ceil(np.geomspace(min_comps, max_comps, num=num)).astype(int))
+        ]
         print_err(f"Testing {n_comps=}")
         
         results = defaultdict(list)
         for n_comp in tqdm(n_comps):
-            _, _, err = nmf(X, ncomps=n_comp)
+            _, _, err = nmf(X, ncomps=n_comp, max_iter=max_iter, seed=seed)
             results["n_comp"].append(n_comp)
             results["err"].append(err)
         
         results = pd.DataFrame(results)
-        knee_x, knee_y = find_knee(*results[["n_comp", "err"]].T.values)
+        if len(results) < 3:
+            # A knee needs at least three distinct ranks; by convention take the largest tested rank
+            print_err("Fewer than 3 candidate ranks; using the largest")
+            knee_x, knee_y = results["n_comp"].iloc[-1], results["err"].iloc[-1]
+        else:
+            knee_x, knee_y = find_knee(*results[["n_comp", "err"]].T.values)
         print_err(knee_x, knee_y)
-        factorizer, (W, H), _ = nmf(X, ncomps=int(knee_x))
+        factorizer, (W, H), _ = nmf(X, ncomps=int(knee_x), max_iter=max_iter, seed=seed)
         return results, (knee_x, knee_y), factorizer, (W, H)
 
     m = pd.read_csv("${matrix}", sep="\\t", index_col=0)

@@ -242,24 +242,37 @@ process make_rbh_matrix {
     from scipy.stats import entropy
 
 
+    def _normalise(x, axis):
+        # Returns proportions along `axis`, and a mask of slices where the statistic is defined:
+        # at least two entries and a positive total. Undefined slices are reported as NaN.
+        x = np.asarray(x, dtype=float)
+        total = x.sum(axis=axis, keepdims=True)
+        defined = (total > 0) & np.isfinite(total) & (x.shape[axis] > 1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            p = np.where(defined, x / np.where(defined, total, 1.), 0.)
+        return p, defined
+
+
     def _entropy(x, axis=0, unnorm=False):
         axis_kwargs = {"axis": axis, "keepdims": True}
-        x = np.asarray(x)
-        x = x / x.sum(**axis_kwargs)
-        H =  entropy(x, **axis_kwargs)
-        return H / np.log2(x.shape[axis]) if not unnorm else H
+        p, defined = _normalise(x, axis)
+        H = entropy(p, **axis_kwargs)  # nats
+        if not unnorm and p.shape[axis] > 1:
+            H = H / np.log(p.shape[axis])  # normalise by the maximum, ln(n)
+        return np.where(defined, H, np.nan)
 
 
     def sparsity_index(x, axis=0):
         axis_kwargs = {"axis": axis, "keepdims": True}
-        x = np.asarray(x)
-        x = x / x.sum(**axis_kwargs)
-        n = x.shape[axis]
+        p, defined = _normalise(x, axis)
+        n = p.shape[axis]
         sqrt_n = np.sqrt(n)
-        return (
-            sqrt_n - np.linalg.norm(x, 1, **axis_kwargs) 
-            / np.linalg.norm(x, 2, **axis_kwargs)
-        ) / (sqrt_n - 1.)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            index = (
+                sqrt_n - np.linalg.norm(p, 1, **axis_kwargs) 
+                / np.linalg.norm(p, 2, **axis_kwargs)
+            ) / (sqrt_n - 1.)
+        return np.where(defined, index, np.nan)
         
 
 

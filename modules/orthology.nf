@@ -132,6 +132,13 @@ process find_coverage_cutoff {
         "gap_openings",
     )
 
+    RBH_KEYS = [
+        "target_taxon_id", 
+        "target_uniprot_id", 
+        "ortholog_taxon_id", 
+        "ortholog_uniprot_id",
+    ]
+
     scattergrid_kwargs = {
         "grid_columns": HIST_VALUES,
         "grid_rows": ["target_ortholog_coverage", "target_ortholog_identity"],
@@ -142,44 +149,63 @@ process find_coverage_cutoff {
     }
 
 
+    COVERAGE_CUTOFF_FALLBACK = float("${params.coverage_cutoff_fallback}")
+
+
     def find_coverage_nadir(coverage_values, resolution=10_000):
+        # Returns (density table, (cutoff, log-density at cutoff), method).
+        # method is "inferred" only if a real interior minimum of the fitted density exists;
+        # otherwise the configured fallback is used and labelled as such.
+        coverage_values = np.asarray(coverage_values, dtype=float)
+        coverage_values = coverage_values[np.isfinite(coverage_values)]
+        if coverage_values.shape[0] < 4 or np.ptp(coverage_values) == 0:
+            print_err("Too few or constant coverage values to fit a density; using fallback cutoff")
+            return None, (COVERAGE_CUTOFF_FALLBACK, np.nan), "fallback_insufficient_data"
         xs = np.linspace(coverage_values.min(), coverage_values.max(), num=resolution)
-        gmm = GaussianMixture(n_components=4).fit(coverage_values.reshape(-1, 1))
-        logprob = gmm.score_samples(xs.reshape(-1,1))
-        ys = np.exp(logprob)
-        minima = argrelextrema(ys, np.less)[0]
-        return (
-            pd.DataFrame({"cutoff": xs, "logprob": logprob}), 
-            (xs[minima[-1]], logprob[minima[-1]]),
-        )
+        gmm = GaussianMixture(n_components=4, random_state=42).fit(coverage_values.reshape(-1, 1))
+        logprob = gmm.score_samples(xs.reshape(-1, 1))
+        # minima on the log density (monotone in the density, but no underflow)
+        minima = argrelextrema(logprob, np.less)[0]
+        density = pd.DataFrame({"cutoff": xs, "logprob": logprob})
+        if len(minima) == 0:
+            print_err("No local minimum in coverage density; using fallback cutoff")
+            return density, (COVERAGE_CUTOFF_FALLBACK, np.nan), "fallback_no_minimum"
+        return density, (xs[minima[-1]], logprob[minima[-1]]), "inferred"
 
     df = pd.read_csv("${full_table}", sep="\\t")
     print(f"{df['ortholog_taxon_id'].nunique()=}", file=sys.stderr)
     print(f"{df.shape=}", file=sys.stderr)
 
-    logprob, (COVERAGE_CUTOFF, cutoff_y) = find_coverage_nadir(df["target_ortholog_coverage"].values)
-    print_err(f"{COVERAGE_CUTOFF=}")
+    logprob, (COVERAGE_CUTOFF, cutoff_y), CUTOFF_METHOD = find_coverage_nadir(df["target_ortholog_coverage"].values)
+    print_err(f"{COVERAGE_CUTOFF=} ({CUTOFF_METHOD})")
     with open("coverage-cutoff.txt", "w") as f:
         print(COVERAGE_CUTOFF, file=f)
+    os.makedirs("plots", exist_ok=True)
+    pd.DataFrame({
+        "cutoff": [COVERAGE_CUTOFF], 
+        "method": [CUTOFF_METHOD],
+    }).to_csv("plots/cov-cutoff-method.csv", index=False)
 
-    ## Plot profile likelihood
-    fig, axes = grid()
-    axes.plot(
-        "cutoff",
-        "logprob",
-        data=logprob,
-    )
-    axes.scatter(
-        [COVERAGE_CUTOFF],
-        [cutoff_y],
-        s=10.,
-        c="C1",
-    )
-    axes.set(
-        xlabel="Coverage cutoff",
-        ylabel="Log prob. of minimum",
-    )
-    figsave(fig, "cov-cutoff-loglik", df=logprob)
+    ## Plot profile likelihood (only if a density could be fitted)
+    if logprob is not None:
+        fig, axes = grid()
+        axes.plot(
+            "cutoff",
+            "logprob",
+            data=logprob,
+        )
+        if np.isfinite(cutoff_y):
+            axes.scatter(
+                [COVERAGE_CUTOFF],
+                [cutoff_y],
+                s=10.,
+                c="C1",
+            )
+        axes.set(
+            xlabel="Coverage cutoff",
+            ylabel="Log prob. of minimum",
+        )
+        figsave(fig, "cov-cutoff-loglik", df=logprob)
 
     ## Plot full grid of interactions
     df_sampled = df.sample(min(1_000_000, df.shape[0]), random_state=42)
@@ -194,7 +220,8 @@ process find_coverage_cutoff {
     for _x, ax in zip(HIST_VALUES, axes[0]):
         if _x == "target_ortholog_coverage":
             plotf = ax.axvline
-            ax.plot(logprob["cutoff"], np.exp(logprob["logprob"]), color="dimgrey")
+            if logprob is not None:
+                ax.plot(logprob["cutoff"], np.exp(logprob["logprob"]), color="dimgrey")
         else:
             plotf = ax.axhline
         plotf(COVERAGE_CUTOFF, color="lightgrey")
@@ -203,14 +230,14 @@ process find_coverage_cutoff {
 
     ## Plot smaller grid of interactions after RBH
     df_rbh = pd.read_csv("${rbh_table}", sep="\\t")
-    rbh_sampled = df_rbh.sample(min(1_000_000, df_rbh.shape[0]))
+    rbh_sampled = df_rbh.sample(min(1_000_000, df_rbh.shape[0]), random_state=42)
     fig, axes = scattergrid(
         rbh_sampled,
         **scattergrid_kwargs,
     )
 
     for _x, ax in zip(HIST_VALUES, axes[0]):
-        plotf = ax.axhline
+        plotf = ax.axvline if _x == "target_ortholog_coverage" else ax.axhline
         plotf(COVERAGE_CUTOFF, color="lightgrey")
     figsave(fig, "cov-cutoff-rbh", df=rbh_sampled)
 
@@ -243,10 +270,13 @@ process find_coverage_cutoff {
     )(
         fig, 
         "rbh-before-after-hist", 
-        df=df_rbh
-            .assign(retained_in_rbh=True)
-            .merge(df, how="left")
-            .assign(retained_in_rbh=lambda x: x["retained_in_rbh"].fillna(False))
+        df=df
+            .merge(
+                df_rbh[RBH_KEYS].drop_duplicates().assign(retained_in_rbh=True),
+                on=RBH_KEYS,
+                how="left",
+            )
+            .assign(retained_in_rbh=lambda x: x["retained_in_rbh"].fillna(False).astype(bool))
         ,
     )
 

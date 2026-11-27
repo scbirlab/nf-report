@@ -1,7 +1,7 @@
 process fetch_fastas_from_organism_id {
 
-   errorStrategy { task.exitStatus == 35 ? 'retry' : ( task.exitStatus in [45, 46] ? 'ignore' : 'terminate') }  // sometimes UniProt fails to respond
-   maxRetries 1
+   errorStrategy { task.exitStatus == 35 ? 'retry' : ( task.exitStatus in [45, 46] ? 'ignore' : 'terminate') }  // sometimes UniProt fails to respond or rate-limits
+   maxRetries 3
    time '1h'
 
    tag "${id}"
@@ -22,18 +22,21 @@ process fetch_fastas_from_organism_id {
    """
    set -eox pipefail
 
-   function get_proteome_id() {
-      curl "https://rest.uniprot.org/proteomes/search?query=(taxonomy_id:${organism_id})&format=json" \
-      | jq -r '
-         .results[] 
-         | select(.proteomeType == "'"\$1"' proteome") 
-         | .id
-      ' | head -n1
-   }
+   UA='scbirlab-nf-report/0.4 (+https://scbirlab.org)'
 
-   function has_fasta() {
-      [ -s "\$1" ] && gunzip -t "\$1" && zcat "\$1" \
-      | grep '^>' > /dev/null
+   # Back off on retries (UniProt rate-limits with HTTP 429)
+   sleep \$(( (${task.attempt} - 1) * 30 ))
+
+   # Prints the first proteome ID of the given type, or nothing if there is none.
+   # Returns 2 if UniProt could not be reached or returned an error.
+   function get_proteome_id() {
+      # -o (not stdout) so that a retry rewrites the file instead of appending to a partial body
+      curl -sS --fail --retry 3 --retry-delay 5 -A "\$UA" -o proteome-search.json \
+         "https://rest.uniprot.org/proteomes/search?query=(taxonomy_id:${organism_id})&format=json" \
+      || return 2
+      jq -r --arg type "\$1 proteome" '
+         first(.results[] | select(.proteomeType == \$type) | .id) // empty
+      ' proteome-search.json
    }
 
    function normalize_headers() {
@@ -52,18 +55,27 @@ process fetch_fastas_from_organism_id {
       | gzip -c > "\$2"
    }
 
-   # Returns 0 = usable FASTA written, 1 = reached the server but nothing usable
-   # (e.g. purged/404), 2 = connection or server-side trouble, worth a retry.
+   # Returns
+   #   0 = usable FASTA written
+   #   1 = confirmed absence (HTTP 200 with nothing in it, or 404/410)
+   #   2 = transient: connection failure, rate-limit, server error, or a 200 whose
+   #       body is not a complete gzip (truncated/corrupt download)
+   #   3 = unexpected permanent error (any other HTTP status)
+   # Status is checked first, so a bad response can never be mistaken for absence.
    function try_fetch() {
       local status
-      status=\$(curl -s -o "\$2" -w '%{http_code}' "\$1" || echo "000")
-      if has_fasta "\$2"
-      then
-         return 0
-      fi
+      # on connection failure curl exits non-zero but -w has already printed 000
+      status=\$(curl -s -A "\$UA" -o "\$2" -w '%{http_code}' "\$1") || status=000
       case "\$status" in
-         000|5??) return 2 ;;
-         *)       return 1 ;;
+         200)
+            [ -s "\$2" ] || return 1
+            gunzip -t "\$2" 2> /dev/null || return 2
+            zcat "\$2" | grep '^>' > /dev/null && return 0
+            return 1
+            ;;
+         404|410)     return 1 ;;
+         000|429|5??) return 2 ;;
+         *)           echo "Unexpected HTTP \$status from \$1" >&2; return 3 ;;
       esac
    }
 
@@ -71,7 +83,13 @@ process fetch_fastas_from_organism_id {
    PROTEOME_ID=
    for q in "\${QUERIES[@]}"
    do
-      PROTEOME_ID=\$(get_proteome_id "\$q")
+      rc=0
+      PROTEOME_ID=\$(get_proteome_id "\$q") || rc=\$?
+      if [ "\$rc" -ne 0 ]
+      then
+         echo "UniProt proteome search failed for taxonomy ID ${organism_id}"
+         exit 35
+      fi
       if [ -n "\$PROTEOME_ID" ]
       then 
          echo "Found \$PROTEOME_ID"
@@ -85,36 +103,44 @@ process fetch_fastas_from_organism_id {
       exit 45
    fi
 
-   TROUBLE=0
-
-   if try_fetch "https://rest.uniprot.org/uniprotkb/stream?query=(proteome:\$PROTEOME_ID)&format=fasta&download=true&compressed=true" uniprotkb.fasta.gz
+   # A transient failure (rc 2) must retry the whole task, not fall through to
+   # UniParc: that would silently swap UniProtKB accessions for UPI accessions.
+   rc=0
+   try_fetch "https://rest.uniprot.org/uniprotkb/stream?query=(proteome:\$PROTEOME_ID)&format=fasta&download=true&compressed=true" uniprotkb.fasta.gz || rc=\$?
+   if [ "\$rc" -eq 0 ]
    then
       mv uniprotkb.fasta.gz proteome.fasta.gz
       exit 0
-   elif [ \$? -eq 2 ]
+   elif [ "\$rc" -eq 2 ]
    then
-      TROUBLE=1
+      echo "UniProtKB unreachable, rate-limiting or returned a corrupt download for proteome \$PROTEOME_ID (taxonomy ${organism_id})"
+      exit 35
+   elif [ "\$rc" -eq 3 ]
+   then
+      echo "Unexpected UniProtKB response for proteome \$PROTEOME_ID (taxonomy ${organism_id})"
+      exit 1
    fi
 
    echo "Proteome \$PROTEOME_ID not recoverable from UniProtKB (taxonomy ${organism_id}); trying UniParc"
 
-   if try_fetch "https://rest.uniprot.org/uniparc/stream?query=(upid:\$PROTEOME_ID)&format=fasta&compressed=true" uniparc.fasta.gz
+   rc=0
+   try_fetch "https://rest.uniprot.org/uniparc/stream?query=(upid:\$PROTEOME_ID)&format=fasta&compressed=true" uniparc.fasta.gz || rc=\$?
+   if [ "\$rc" -eq 0 ]
    then
       normalize_headers uniparc.fasta.gz proteome.fasta.gz
       exit 0
-   elif [ \$? -eq 2 ]
+   elif [ "\$rc" -eq 2 ]
    then
-      TROUBLE=1
+      echo "UniParc unreachable, rate-limiting or returned a corrupt download for proteome \$PROTEOME_ID (taxonomy ${organism_id})"
+      exit 35
+   elif [ "\$rc" -eq 3 ]
+   then
+      echo "Unexpected UniParc response for proteome \$PROTEOME_ID (taxonomy ${organism_id})"
+      exit 1
    fi
 
-   if [ "\$TROUBLE" -eq 1 ]
-   then
-      echo "UniProt/UniParc unreachable for proteome \$PROTEOME_ID (taxonomy ${organism_id})"
-      exit 35
-   else
-      echo "Proteome \$PROTEOME_ID has no recoverable sequences in UniProtKB or UniParc (taxonomy ${organism_id})"
-      exit 46
-   fi
+   echo "Proteome \$PROTEOME_ID has no recoverable sequences in UniProtKB or UniParc (taxonomy ${organism_id})"
+   exit 46
 
    """
 
@@ -131,22 +157,75 @@ process fetch_fastas_from_uniprot_ids {
    publishDir( 
       "${params.outputs}/sequences", 
       mode: 'copy',
-      saveAs: { "${id[0]}.${id[-1]}.fasta.gz" },
+      saveAs: { "${id[0]}.${id[-1]}.${it}" },
    )
 
    input:
    val id
 
    output:
-   path "proteins.fasta.gz"
+   path "fasta.gz", emit: fasta
+   path "missing-accessions.txt", emit: missing
+   path "unexpected-accessions.txt", emit: unexpected
 
    script:
    """
-   set -x
-   curl -X GET --header 'Accept:text/x-fasta'  -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
-      'https://www.ebi.ac.uk/proteins/api/proteins?offset=0&size=-1&accession=${id.join(',')}' \
-   > proteins.fasta
-   gzip --best proteins.fasta
+   set -euxo pipefail
+
+   cat > requested.txt <<'EOF_IDS'
+${id.join('\n')}
+EOF_IDS
+   sort -u requested.txt > requested.sorted.txt
+
+   # --fail makes HTTP errors a non-zero exit, so errorStrategy 'retry' actually applies
+   curl -sS --fail --retry 3 --retry-delay 5 --header 'Accept:text/x-fasta' -A 'scbirlab-nf-report/0.4 (+https://scbirlab.org; contact: eachan.johnson@crick.ac.uk)' \
+      -o proteins.fasta \
+      'https://www.ebi.ac.uk/proteins/api/proteins?offset=0&size=-1&accession=${id.join(',')}'
+
+   # The API silently omits accessions it does not know (obsolete, demerged, isoforms),
+   # so compare what came back against what was asked for.
+   { grep '^>' proteins.fasta || true; } | cut -d'|' -f2 | sort -u > returned.txt
+   comm -23 requested.sorted.txt returned.txt > missing-accessions.txt
+   comm -13 requested.sorted.txt returned.txt > unexpected-accessions.txt
+
+   # Structural checks: duplicated records (e.g. a retry appended to a partial body) or
+   # headers with no sequence mean the download is corrupt, not merely incomplete.
+   { grep '^>' proteins.fasta || true; } | cut -d'|' -f2 | sort | uniq -d > duplicated.txt
+   if [ -s duplicated.txt ]
+   then
+      echo "ERROR: duplicated FASTA records for \$(wc -l < duplicated.txt) accessions" >&2
+      exit 1
+   fi
+   empty_records=\$(awk '/^>/ { if (hdr && !seq) n++; hdr=1; seq=0; next } NF { seq=1 } END { if (hdr && !seq) n++; print n+0 }' proteins.fasta)
+   if [ "\$empty_records" -gt 0 ]
+   then
+      echo "ERROR: \$empty_records FASTA headers have no sequence" >&2
+      exit 1
+   fi
+
+   if [ ! -s returned.txt ]
+   then
+      echo "ERROR: no sequences returned for a batch of \$(wc -l < requested.sorted.txt) accessions" >&2
+      exit 1
+   fi
+   if [ -s unexpected-accessions.txt ]
+   then
+      # e.g. secondary accessions resolved to a primary one; informative unless strict
+      echo "WARNING: \$(wc -l < unexpected-accessions.txt) returned accessions were not requested; see unexpected-accessions.txt" >&2
+      if [ "${params.fail_on_missing_sequences}" == "true" ]
+      then
+         exit 1
+      fi
+   fi
+   if [ -s missing-accessions.txt ]
+   then
+      echo "WARNING: \$(wc -l < missing-accessions.txt) of \$(wc -l < requested.sorted.txt) accessions not returned; see missing-accessions.txt" >&2
+      if [ "${params.fail_on_missing_sequences}" == "true" ]
+      then
+         exit 1
+      fi
+   fi
+   gzip --best -c proteins.fasta > fasta.gz
 
    """
 
@@ -156,7 +235,7 @@ process fetch_species_gene_names {
 
    tag "${id}:${column}"
    stageInMode 'link'
-   errorStrategy { if(task.attempt > 2) { return 'retry' } else { return 'ignore' } }  // retry if network issue, ignore if input issue
+   errorStrategy { task.exitStatus == 35 && task.attempt <= task.maxRetries ? 'retry' : 'terminate' }  // 35 = transient network failure (retry); anything else, or retries exhausted, stops the run rather than silently dropping an organism
    maxRetries 2
 
    publishDir( 
@@ -174,10 +253,20 @@ process fetch_species_gene_names {
 
    script:
    """
-   set -x
+   set -euxo pipefail
 
-   col=\$(zcat "${table}" | head -n1 | tr \$'\\t' \$'\\n' | grep -nFw "${column}" | cut -d: -f1)
-   zcat "${table}" | tail -n+2 | cut -f"\$col" | sort -u > all_ids.txt
+   # Exact (whole-header) match for the accession column
+   IFS= read -r table_header < <(zcat "${table}")
+   col=\$(
+      awk -F'\\t' -v c="${column}" '{ for ( i=1; i<=NF; i++ ) if ( \$i == c ) { print i; exit } }' \
+      <<< "\$table_header"
+   )
+   if [ -z "\$col" ]
+   then
+      echo "Column ${column} not found in ${table}" >&2
+      exit 1
+   fi
+   zcat "${table}" | tail -n+2 | cut -f"\$col" | sort -u | awk 'NF' > all_ids.txt
 
    # UniParc accessions (proteome archived off UniProtKB) need a different endpoint
    # and a taxon-specific filter; everything else is a UniProtKB accession.
@@ -185,7 +274,7 @@ process fetch_species_gene_names {
    grep -vE '^UPI[0-9A-Fa-f]{10}\$' all_ids.txt > uniprotkb_ids.txt || true
    split -l50 uniprotkb_ids.txt 'ids_'
 
-   printf '${column}\\tortholog_target_name\\tortholog_target_locus\\tortholog_name_source_db\\tortholog_name_source_id\\tgene_name_source\\n' \
+   printf '${column}\\tortholog_target_name\\tortholog_target_locus\\tortholog_target_protein_name\\tortholog_name_source_db\\tortholog_name_source_id\\tgene_name_source\\n' \
    > targets0.tsv
 
    url='https://www.ebi.ac.uk/proteins/api/proteins'
@@ -200,18 +289,27 @@ process fetch_species_gene_names {
       for f in ids_*
       do
          these_ids=\$(tr \$'\\n' , < "\$f")
-         curl -s -X GET --header "\$header" -A "\$ua" \
-            "\${url}?\${base_query}&accession=\${these_ids}" \
-         | jq -r '
-            .[] | [
-            .accession, 
-            (.gene[0].name.value // "NA"), 
-            ((.gene[0].olnNames // (.gene[0].orfNames // []))[0].value // "NA"),
-            "NA",
-            .accession,
-            "uniprotkb"
-         ] | @tsv
-         ' \
+         status=\$(curl -sS --retry 3 --retry-delay 5 --header "\$header" -A "\$ua" \
+            -o response.json -w '%{http_code}' \
+            "\${url}?\${base_query}&accession=\${these_ids}") || status=000
+         case "\$status" in
+            200) ;;
+            000|429|5??) echo "Transient HTTP \$status from UniProt Proteins API" >&2; exit 35 ;;
+            *) echo "Permanent HTTP \$status from UniProt Proteins API for batch \$f" >&2; exit 1 ;;
+         esac
+         jq -e 'type == "array"' response.json > /dev/null || exit 35
+         jq -r '
+            ( if type == "array" then .[] else empty end )
+            | [
+               .accession, 
+               (.gene[0].name.value // "NA"), 
+               ((.gene[0].olnNames // (.gene[0].orfNames // []))[0].value // "NA"),
+               (.protein.recommendedName.fullName.value // .protein.submittedName[0].fullName.value // "NA"),
+               "NA",
+               .accession,
+               "uniprotkb"
+            ] | @tsv
+         ' response.json \
          >> targets0.tsv
       done
    fi
@@ -221,17 +319,34 @@ process fetch_species_gene_names {
    then
       while read -r upi
       do
-         resp=\$(curl -s -X GET --header \$header -A "\$ua" \
-            "\${uniparc_url}/\${upi}?rfTaxId=${id}")
-         if [ -z "\$resp" ]
+         status=\$(curl -sS --retry 3 --retry-delay 5 --header "\$header" -A "\$ua" \
+            -o upi.json -w '%{http_code}' "\${uniparc_url}/\${upi}?rfTaxId=${id}") || status=000
+         case "\$status" in
+            200) ;;
+            000|429|5??)
+               # exhausted transient failure: same policy as UniProtKB, stop rather than drop annotations
+               echo "UniParc lookup of \$upi failed transiently (HTTP \$status)" >&2
+               exit 35
+               ;;
+            404|410)
+               # the server answered but has nothing for this UPI/taxon
+               printf '%s\\tNA\\tNA\\tNA\\tNA\\tNA\\tuniparc_lookup_failed\\n' "\$upi" \
+               >> targets0.tsv
+               continue
+               ;;
+            *)
+               # 400/401/403/...: a malformed or refused query would fail for every UPI, so stop
+               echo "Unexpected HTTP \$status from UniParc for \$upi" >&2
+               exit 1
+               ;;
+         esac
+         if ! jq -e 'type == "object"' upi.json > /dev/null 2>&1
          then
-            printf '%s\\tNA\\tNA\\tNA\\tNA\\tuniparc_lookup_failed\\n' "\$upi" \
-            >> targets0.tsv
-            continue
+            # a 200 that is not the expected JSON object is a bad download: treat as transient
+            echo "UniParc lookup of \$upi returned an unexpected body" >&2
+            exit 35
          fi
-         echo "\$resp" \
-         | jq -r \
-            --arg acc "\$upi" '
+         jq -r --arg acc "\$upi" '
             (.dbReference // []) as \$refs
             | ( \$refs | map(select(.type == "UniProtKB/TrEMBL")) | first ) as \$trembl
             | ( \$trembl // \$refs[0] // {} ) as \$entry
@@ -241,12 +356,13 @@ process fetch_species_gene_names {
             | [
                 \$acc, 
                 \$gene, 
+                "NA",
                 \$protein,
                 (\$entry.type // "NA"), 
                 (\$entry.id // "NA"),
                 (if (\$refs | length) == 0 then "uniparc_no_taxon_match" else "uniparc" end)
               ] | @tsv
-         ' >> targets0.tsv
+         ' upi.json >> targets0.tsv
       done < uniparc_ids.txt
    fi
 
