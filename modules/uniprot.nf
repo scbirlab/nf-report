@@ -314,37 +314,42 @@ process fetch_species_gene_names {
       done
    fi
 
-   # --- UniParc accessions ---
+   # --- UniParc accessions (one request per UPI, a few at a time) ---
    if [ -s uniparc_ids.txt ]
    then
-      while read -r upi
-      do
+      mkdir uniparc_rows
+
+      lookup_upi() {
+         local upi="\$1"
+         local out="uniparc_rows/\${upi}.tsv"
+         local resp="uniparc_rows/\${upi}.json"
+         local status
          status=\$(curl -sS --retry 3 --retry-delay 5 --header "\$header" -A "\$ua" \
-            -o upi.json -w '%{http_code}' "\${uniparc_url}/\${upi}?rfTaxId=${id}") || status=000
+            -o "\$resp" -w '%{http_code}' "\${uniparc_url}/\${upi}?rfTaxId=${id}") || status=000
          case "\$status" in
             200) ;;
             000|429|5??)
                # exhausted transient failure: same policy as UniProtKB, stop rather than drop annotations
-               echo "UniParc lookup of \$upi failed transiently (HTTP \$status)" >&2
-               exit 35
+               echo "UniParc lookup of \$upi failed transiently (HTTP \$status)" | tee "uniparc_rows/\${upi}.transient" >&2
+               return 0
                ;;
             404|410)
                # the server answered but has nothing for this UPI/taxon
-               printf '%s\\tNA\\tNA\\tNA\\tNA\\tNA\\tuniparc_lookup_failed\\n' "\$upi" \
-               >> targets0.tsv
-               continue
+               printf '%s\\tNA\\tNA\\tNA\\tNA\\tNA\\tuniparc_lookup_failed\\n' "\$upi" > "\$out"
+               return 0
                ;;
             *)
                # 400/401/403/...: a malformed or refused query would fail for every UPI, so stop
+               # (xargs then exits 123 and set -e ends the task)
                echo "Unexpected HTTP \$status from UniParc for \$upi" >&2
-               exit 1
+               return 1
                ;;
          esac
-         if ! jq -e 'type == "object"' upi.json > /dev/null 2>&1
+         if ! jq -e 'type == "object"' "\$resp" > /dev/null 2>&1
          then
             # a 200 that is not the expected JSON object is a bad download: treat as transient
-            echo "UniParc lookup of \$upi returned an unexpected body" >&2
-            exit 35
+            echo "UniParc lookup of \$upi returned an unexpected body" | tee "uniparc_rows/\${upi}.transient" >&2
+            return 0
          fi
          jq -r --arg acc "\$upi" '
             (.dbReference // []) as \$refs
@@ -362,8 +367,26 @@ process fetch_species_gene_names {
                 (\$entry.id // "NA"),
                 (if (\$refs | length) == 0 then "uniparc_no_taxon_match" else "uniparc" end)
               ] | @tsv
-         ' upi.json >> targets0.tsv
-      done < uniparc_ids.txt
+         ' "\$resp" > "\$out"
+      }
+      export -f lookup_upi
+      export header ua uniparc_url
+
+      # xargs -P 0 means unlimited concurrency, so insist on a positive integer
+      if ! [[ "${params.uniparc_workers}" =~ ^[1-9][0-9]*\$ ]]
+      then
+         echo "params.uniparc_workers must be a positive integer, got '${params.uniparc_workers}'" >&2
+         exit 1
+      fi
+      # strict mode in the worker shells too; a worker failure makes xargs exit 123 and ends the task
+      xargs -a uniparc_ids.txt -P ${params.uniparc_workers} -I{} bash -euo pipefail -c 'lookup_upi "\$1"' _ {}
+      if ls uniparc_rows/*.transient 1> /dev/null 2>&1
+      then
+         echo "UniParc lookups failed transiently for \$(ls uniparc_rows/*.transient | wc -l) accessions:" >&2
+         cat uniparc_rows/*.transient >&2
+         exit 35
+      fi
+      cat uniparc_rows/*.tsv >> targets0.tsv
    fi
 
    python -c '
