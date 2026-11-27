@@ -20,12 +20,6 @@ jobs:
         sudo docker builder prune -a
     - run: df -h
     - uses: actions/checkout@v4
-    - uses: conda-incubator/setup-miniconda@v3
-      with:
-        python-version: 3.14
-        channels: conda-forge,bioconda
-        miniforge-version: latest
-        channel-priority: strict
     - uses: nf-core/setup-nextflow@v1
       with:
         version: 25
